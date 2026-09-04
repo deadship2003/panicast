@@ -4,9 +4,9 @@
 #include "panicast/app/playback_events.h"
 #include "panicast/core/event_bus.h"
 #include "panicast/net/bilibili_api.h"
-#include "panicast/net/lms_server.h" // N08: mini-LMS (Squeezer) — guarded use; ON builds only
+#include "panicast/net/lms_server.h"   // N08: mini-LMS (Squeezer) — guarded use; ON builds only
 #include "panicast/ui/null_frontend.h" // N09/S1: daemon frontend
-#include "panicast/net/network.h" // D45-fix: Network::init_proxy_routing after IniConfig load
+#include "panicast/net/network.h"      // D45-fix: Network::init_proxy_routing after IniConfig load
 #include "panicast/net/tiktok_region.h"
 #include "panicast/parsers/bilibili_parser.h"
 #include <cstdio>
@@ -14,7 +14,6 @@
 
 namespace panicast
 {
-
 
 App::App() {
     Logger::instance().init();
@@ -90,6 +89,12 @@ void App::run() {
             //   paced by sleep instead of the 30ms ncurses input poll. No draw, no input.
             if (check_exit_requests())
                 break;
+            // N10.3: the display list is ENGINE state in the daemon, not just a draw
+            //   source — the remote browse mirror (RemoteStateSnapshot::browse) and the
+            //   nav/nav_activate actions read display_list(). Rebuild it every frame
+            //   like the TUI does (flatten + async select consume + subtitle poll all
+            //   ride along; NullFrontend swallows the UI bits).
+            build_frame_display();
             drain_frame_events();
             std::this_thread::sleep_for(std::chrono::milliseconds(33));
             continue;
@@ -273,8 +278,7 @@ void App::draw_frame(const FrameCtx &f) {
     std::vector<int> next_snap;
     std::string cur_url_snap;
     const auto _pw0 = std::chrono::steady_clock::now();
-    std::lock_guard<std::mutex> pl_draw_lock(
-        playback_.playlist_mutex()); // released before input
+    std::lock_guard<std::mutex> pl_draw_lock(playback_.playlist_mutex()); // released before input
     const long _pl_wait_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                  std::chrono::steady_clock::now() - _pw0)
                                  .count();
@@ -308,8 +312,7 @@ void App::draw_frame(const FrameCtx &f) {
     static int hist_frame_cnt = 0;
     static std::vector<std::string> cached_hist_titles;
     static std::string cached_hist_url;
-    if (++hist_frame_cnt >= 30 ||
-        (!cur_url_snap.empty() && cur_url_snap != cached_hist_url)) {
+    if (++hist_frame_cnt >= 30 || (!cur_url_snap.empty() && cur_url_snap != cached_hist_url)) {
         hist_frame_cnt = 0;
         cached_hist_url = cur_url_snap;
         cached_hist_titles.clear();
@@ -334,8 +337,7 @@ void App::draw_frame(const FrameCtx &f) {
     DisplayContext dctx;
     dctx.sleep_active = SleepTimer::instance().is_active();
     dctx.sleep_remaining = dctx.sleep_active ? SleepTimer::instance().remaining_seconds() : 0;
-    dctx.online_region_name =
-        ITunesSearch::get_region_name(OnlineState::instance().current_region);
+    dctx.online_region_name = ITunesSearch::get_region_name(OnlineState::instance().current_region);
     dctx.tiktok_region = TikTokRegion::current();
     // D14-3/D15: canonical now-playing identity from PlaybackService. The UI reads the
     //   playing track's url+title from this view-model bag instead of a domain TreeNodePtr,
@@ -345,11 +347,11 @@ void App::draw_frame(const FrameCtx &f) {
     dctx.now_playing_url = np.id.url();
     dctx.now_playing_title = np.title;
 
-    frontend_->draw(mode, library_.display_list(), library_.selected_idx(), f.state, library_.view_start(), f.app_state,
-            f.marked, search_.search_query(), search_.current_match_idx(),
-            search_.total_matches(), f.sel_node, f.downloads,
-            visual_mode_, visual_start_, playback_.playlist(), current_index_snap,
-            play_mode, hist_titles, next_snap, dctx);
+    frontend_->draw(mode, library_.display_list(), library_.selected_idx(), f.state,
+                    library_.view_start(), f.app_state, f.marked, search_.search_query(),
+                    search_.current_match_idx(), search_.total_matches(), f.sel_node, f.downloads,
+                    visual_mode_, visual_start_, playback_.playlist(), current_index_snap,
+                    play_mode, hist_titles, next_snap, dctx);
 }
 
 // D35: run() startup bookend — one-time init before the frame loop.
@@ -457,8 +459,8 @@ void App::startup() {
     action_subs_.push_back(EventBus::instance().subscribe<NavDownAction>(
         [this](const NavDownAction &) { nav_down(); }));
     // D42: mode-switch keys (R/P/F/H/O/Y/B/I) → SwitchModeAction.
-    action_subs_.push_back(EventBus::instance().subscribe<SwitchModeAction>(
-        [this](const SwitchModeAction &a) {
+    action_subs_.push_back(
+        EventBus::instance().subscribe<SwitchModeAction>([this](const SwitchModeAction &a) {
             switch_mode(a.target);
             if (!a.hint.empty())
                 EVENT_LOG(a.hint);
@@ -614,7 +616,8 @@ void App::shutdown() {
         if (URLClassifier::classify(canonical_url) != URLType::RADIO_STREAM || finite) {
             bool completed = (player_state.media_duration > 0 &&
                               player_state.time_pos >= player_state.media_duration - 5.0);
-            DatabaseManager::instance().save_progress(canonical_url, player_state.time_pos, completed);
+            DatabaseManager::instance().save_progress(canonical_url, player_state.time_pos,
+                                                      completed);
             LOG(fmt::format("[Progress] Saved: {} at {:.1f}s (completed={})", canonical_url,
                             player_state.time_pos, completed));
         } else {
@@ -641,10 +644,9 @@ void App::shutdown() {
     // Exit IMMEDIATELY — skip ~App destructors (the pool workers are detached and could
     //   access App members during destruction → use-after-free). The terminal is already
     //   restored by frontend_->cleanup; the OS reclaims all resources (threads, mpv, DB handles).
-        if (exit_hook_)
+    if (exit_hook_)
         exit_hook_(); // N09/S1: daemon cleanup (pid file) — _exit skips main's epilogue
     _exit(0);
 }
-
 
 } // namespace panicast

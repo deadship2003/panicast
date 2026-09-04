@@ -170,6 +170,45 @@ void App::update_remote_state_cache() {
         }
     }
 
+    // Current-mode browse list (Squeeze Client's "panicast library"): the flat display
+    //   list the TUI renders. REBUILT only when its signature changes (hashing titles
+    //   every frame is cheap; re-materializing row strings is not — episode lists run
+    //   long); the row copy into the snapshot is bounded by the cap below.
+    {
+        static std::string last_sig;
+        static std::vector<RemoteBrowseItem> cached_rows;
+        auto &dl = library_.display_list();
+        uint64_t h = 1469598103934665603ull;
+        auto mix = [&](const std::string &v) {
+            for (unsigned char c : v) {
+                h ^= c;
+                h *= 1099511628211ull;
+            }
+        };
+        mix(s.mode);
+        for (const auto &d : dl) {
+            h ^= (uint64_t)d.depth;
+            h *= 1099511628211ull;
+            mix(d.node ? d.node->title : std::string());
+        }
+        s.browse_sig = std::to_string(h);
+        if (s.browse_sig != last_sig) {
+            last_sig = s.browse_sig;
+            cached_rows.clear();
+            size_t n = 0;
+            for (const auto &d : dl) {
+                if (!d.node || n >= 400) // remote page cap; TUI keeps the full list
+                    break;
+                bool branch =
+                    d.node->type == NodeType::FOLDER || d.node->type == NodeType::PODCAST_FEED;
+                cached_rows.push_back(
+                    {d.node->title, d.node->subtext, d.node->art_url, d.depth, branch});
+                ++n;
+            }
+        }
+        s.browse = cached_rows;
+    }
+
     if (SleepTimer::instance().is_active()) {
         s.sleep_remaining = SleepTimer::instance().remaining_seconds();
     } else {
@@ -484,6 +523,22 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
             int n = static_cast<int>(library_.display_list().size());
             if (n > 0) {
                 library_.selected_idx() = std::clamp(idx, 0, n - 1);
+            }
+        }
+        return;
+    }
+    // Remote browse (Squeeze Client's library view): select row <idx> + press Enter in
+    //   one atomic dispatch — branch rows descend the tree, leaf rows play. The bus
+    //   preserves order, so pushing nav_select + nav_enter separately would also work,
+    //   but one action keeps the pair from straddling a frame boundary.
+    if (a == "nav_activate") {
+        if (!args.empty()) {
+            int idx = std::atoi(args[0].c_str());
+            int n = static_cast<int>(library_.display_list().size());
+            if (n > 0) {
+                library_.selected_idx() = std::clamp(idx, 0, n - 1);
+                enter_node(count_marked_current());
+                EVENT_LOG(fmt::format("Remote: browse activate row {}", idx));
             }
         }
         return;

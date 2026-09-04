@@ -20,6 +20,18 @@ struct RemotePlaylistItem {
     bool is_video = false;
 };
 
+// One row of the CURRENT mode's display list (the flat tree the TUI renders). Served to
+//   Squeeze Client as the browseable "panicast library" — remote taps map 1:1 onto the
+//   TUI's cursor+Enter (nav_activate), so remote browsing and the TUI stay on the same
+//   list by construction. Not a copy of the tree: only what a remote row needs.
+struct RemoteBrowseItem {
+    std::string title;
+    std::string subtext;    // second line (episode duration/status, feed description)
+    std::string art_url;    // cover/thumbnail when known
+    int depth = 0;          // flatten depth (0 = mode root)
+    bool is_branch = false; // FOLDER / PODCAST_FEED → descend; leaf → play
+};
+
 struct RemoteStateSnapshot {
     // ── player (subset of MPVController::State, already thread-safe via its own mutex) ──
     bool paused = true;
@@ -43,8 +55,12 @@ struct RemoteStateSnapshot {
     int selected_idx = 0;
     int current_index = -1;                   // -1 = nothing in the implicit playlist
     std::vector<RemotePlaylistItem> playlist; // current peers (the implicit play queue)
-    std::string art_url;                      // cover art (TreeNode::art_url of the playing node)
-    int sleep_remaining = -1;                 // -1 = sleep timer inactive
+    // Current-mode display list (see RemoteBrowseItem) + a cheap change signature the
+    //   LMS server polls to detect navigation (browse open/back waits for a list change).
+    std::vector<RemoteBrowseItem> browse;
+    std::string browse_sig;   // FNV over mode + depth + titles; differs → list changed
+    std::string art_url;      // cover art (TreeNode::art_url of the playing node)
+    int sleep_remaining = -1; // -1 = sleep timer inactive
     bool subtitle_active = false;
 };
 

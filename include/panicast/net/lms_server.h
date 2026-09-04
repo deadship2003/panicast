@@ -134,6 +134,10 @@ private:
     //   sockets, so subscription state and last-push bookkeeping must survive across
     //   connections — keyed by Bayeux clientId).
     std::atomic<bool> any_subscribed_{false};             // any status interest seen
+    std::atomic<bool> muted_{false};                      // `mixer muting` state (LMS
+                                                          //   encodes mute as a NEGATIVE
+                                                          //   mixer volume; mpv holds the
+                                                          //   real audio state)
     std::mutex push_mtx_;                                 // guards last_push_by_cid_
     std::map<std::string, std::string> last_push_by_cid_; // cid → last pushed dump
 

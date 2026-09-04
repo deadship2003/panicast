@@ -239,7 +239,40 @@ def main():
         check("push types: count NUMBER", is_num(pushed.get("count")))
         check("push types: player_connected NUMBER", is_num(pushed.get("player_connected")))
 
+
+    print("== remote library browse (panicast browse) ==")
+    br = c.slim(["panicast", "browse", "root", "0", "512"])
+    check("browse count NUMBER", is_num(br.get("count")))
+    check("browse offset NUMBER", is_num(br.get("offset")))
+    brows = br.get("item_loop", [])
+    if brows:
+        check("browse row has text + go action",
+              "text" in brows[0] and brows[0].get("actions", {}).get("go", {}).get("cmd", [])[:2] == ["panicast", "browse"],
+              str(brows[0])[:120])
+    bk = c.slim(["panicast", "browse", "back", "0", "512"])
+    check("browse back well-formed", is_num(bk.get("count")) and "item_loop" in bk)
+    check("menu has 2 entries", is_num(menu.get("count")) and menu.get("count") == 2,
+          str(menu.get("count")))
+
+    print("== mute / sleep / buttons ==")
+    st0 = c.slim(["status", "-", "1"])
+    v0 = st0.get("mixer volume")
+    c.slim(["mixer", "muting", "1"])
+    st1 = c.slim(["status", "-", "1"])
+    check("muting → negative mixer volume", st1.get("mixer volume", 0) < 0, str(st1.get("mixer volume")))
+    c.slim(["mixer", "muting", "0"])
+    st2 = c.slim(["status", "-", "1"])
+    check("unmuting → positive mixer volume", st2.get("mixer volume", -1) >= 0, str(st2.get("mixer volume")))
+    for cmd, label in [ (["button", "jump_fwd"], "button jump_fwd (next)"),
+                        (["button", "jump_rew"], "button jump_rew (prev)"),
+                        (["sleep", "900"], "sleep 900s"),
+                        (["sleep", "0"], "sleep 0 (cancel)") ]:
+        check(f"accepted: {label}", isinstance(c.slim(cmd), dict))
+    check("repeat/shuffle reported as strings",
+          isinstance(st2.get("playlist repeat"), str) and isinstance(st2.get("playlist shuffle"), str))
+
     print(f"\n{passed} passed, {failed} failed")
+
     sys.exit(1 if failed else 0)
 
 

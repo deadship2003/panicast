@@ -609,9 +609,11 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     r["mode"] = mode;
     r["playlist_tracks"] = (int)s.playlist.size();
     r["playlist_cur_index"] = idx;
-    // Enum strings — the Squeezer family reads these as strings ("0"/"1"/"2").
-    r["playlist repeat"] = "0";
-    r["playlist shuffle"] = "0";
+    // Enum strings — the Squeezer family reads these as strings ("0"/"1"/"2"). Mapped
+    //   from panicast's tri-state PlayMode: repeat = single-track loop = LMS "repeat
+    //   song" (1); shuffle = random next (1); cycle (the default) = both off.
+    r["playlist repeat"] = s.play_mode == "repeat" ? "1" : "0";
+    r["playlist shuffle"] = s.play_mode == "shuffle" ? "1" : "0";
     // Content-keyed epoch timestamp (DOUBLE on the wire). Squeeze Client's
     //   PlaylistFragment re-fetches the list when playlist_timestamp CHANGES; a
     //   constant hides queue edits. Cache: same content → same timestamp (change
@@ -640,7 +642,7 @@ nlohmann::json LmsServer::status_data(int start, int window) {
         r["playlist_timestamp"] = last_ts;
     }
     r["playlist_name"] = "";
-    r["will_sleep_in"] = 0;
+    r["will_sleep_in"] = s.sleep_remaining > 0 ? s.sleep_remaining : 0;
     r["sleep"] = 0;
     r["remote"] = 1;
     r["sync_master"] = "";
@@ -652,7 +654,10 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     r["duration"] = s.duration;
     r["canseek"] = 1;
     r["digital_volume_control"] = 1;
-    r["mixer volume"] = s.volume; // LMS keeps the space in the JSON key
+    // LMS mute convention: a NEGATIVE mixer volume means muted (Squeeze Client reads
+    //   vol < 0 as muted, |vol| as the level). Encoded as -(level)-1 so level 0 stays
+    //   distinguishable from "not muted at 0".
+    r["mixer volume"] = muted_.load() ? -(s.volume) - 1 : s.volume;
     r["count"] = (int)s.playlist.size();
     // NOTE: no "offset" — PlayerStatusResponse declares it String? while the browse
     //   decoders declare Int; omitting satisfies both (defaults cover it).
@@ -889,15 +894,22 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
     } else if (k == "prev") {
         push("previous");
     } else if (k == "button" && cmd.size() > 1) {
-        // IR-button spellings Squeezer's repeat/shuffle buttons send. LMS cycles
-        //   through 2-3 modes per press; our PlayMode is a tri-state the remote
-        //   already exposes ("repeat"/"shuffle" actions) — set, don't cycle.
-        if (cmd[1] == "shuffle")
-            push("shuffle");
-        else if (cmd[1] == "repeat")
-            push("repeat");
-        else
+        // IR-button spellings (Squeeze Client's prev/next/shuffle/repeat buttons).
+        //   LMS cycles 2-3 modes per press; our PlayMode is a tri-state, so the
+        //   toggles flip ON from any other state and back OFF when already active.
+        if (cmd[1] == "jump_fwd") {
+            push("next");
+        } else if (cmd[1] == "jump_rew") {
+            push("previous");
+        } else if (cmd[1] == "shuffle") {
+            std::string cur = control_ ? control_->snapshot_state().play_mode : "";
+            push(cur == "shuffle" ? "cycle" : "shuffle");
+        } else if (cmd[1] == "repeat") {
+            std::string cur = control_ ? control_->snapshot_state().play_mode : "";
+            push(cur == "repeat" ? "cycle" : "repeat");
+        } else {
             LOG(fmt::format("[LMS-JSON] unhandled button: {}", cmd[1]));
+        }
     } else if (k == "playlist" && cmd.size() > 1) {
         const std::string &sub = cmd[1];
         if (sub == "index" && cmd.size() > 2) {
@@ -950,11 +962,27 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 else
                     push_arg("volume", v);
             }
+        } else if (cmd[1] == "muting" && cmd.size() > 2) {
+            // Squeeze Client's mute button ("mixer muting 1/0"). mpv holds the audio
+            //   state; we track the flag only to re-encode it as a negative mixer
+            //   volume in status (LMS convention).
+            bool on = cmd[2] == "toggle" ? !muted_.load() : cmd[2] == "1";
+            muted_.store(on);
+            if (bus_) // "set mute yes|no" via the mpv passthrough action
+                bus_->push({"mpv", {"set", "mute", on ? "yes" : "no"}, c.client_id});
         }
-        // muting unsupported → accept silently
     } else if (k == "time") {
         if (cmd.size() > 1 && cmd[1] != "?")
             push_arg("seekto", cmd[1]);
+    } else if (k == "sleep" && cmd.size() > 1 && cmd[1] != "?") {
+        // LMS sleep takes SECONDS; the app's sleep dialog sends minutes-as-seconds —
+        //   pass through (SleepTimer accepts "90" = 90 minutes, so scale: LMS n sec →
+        //   the same duration expressed as seconds for our timer).
+        int secs = std::atoi(cmd[1].c_str());
+        if (secs > 0)
+            push_arg("sleep", std::to_string(secs) + "s");
+        else
+            push("sleep_cancel");
     } else if (k == "playerpref" || k == "pref" || k == "setting") {
         // Squeezer writes player prefs (e.g. alarm volume) — acknowledge, don't apply.
         return nlohmann::json::object();
@@ -963,25 +991,125 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
+    } else if (k == "panicast" && cmd.size() > 1 && cmd[1] == "browse") {
+        // ── Remote library browse (Squeeze Client's main screen) ──────────────────
+        //   The remote mirrors the TUI's CURRENT mode list: rows are display_list
+        //   entries, tapping a row = cursor+Enter (nav_activate) — branch rows
+        //   descend, leaf rows play. "back" pops one level. After a navigation the
+        //   daemon waits (bounded) for the flattened list to change so the reply
+        //   contains the destination, not the origin.
+        std::string where = cmd.size() > 2 ? cmd[2] : "root";
+        int start = cmd.size() > 3 ? std::atoi(cmd[3].c_str()) : 0;
+        int window = cmd.size() > 4 ? std::atoi(cmd[4].c_str()) : 0;
+        if (control_) {
+            std::string before_sig = control_->snapshot_state().browse_sig;
+            bool wait_change = false;
+            if (where == "back") {
+                push("nav_back");
+                wait_change = true; // the pop is in-memory; the next frame's flatten
+                                    //   reflects it — without waiting we'd reply with
+                                    //   the PRE-back list
+            } else if (where != "root") {
+                int idx = std::atoi(where.c_str());
+                auto before = control_->snapshot_state();
+                bool is_branch =
+                    idx >= 0 && idx < (int)before.browse.size() && before.browse[idx].is_branch;
+                push_arg("nav_activate", where);
+                wait_change = is_branch; // leaf rows PLAY (no list change to wait for)
+            }
+            if (wait_change) {
+                // Feed children load asynchronously on the UI thread — wait for
+                //   the signature to change, then hold until it stops moving
+                //   (300ms stillness) or the ~5s budget runs out.
+                std::string prev = before_sig;
+                int still = 0;
+                for (int i = 0; i < 100 && running_.load(); ++i) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    std::string cur = control_->snapshot_state().browse_sig;
+                    if (cur != before_sig) {
+                        still = cur == prev ? still + 1 : 0;
+                        prev = cur;
+                        if (still >= 6)
+                            break;
+                    } else {
+                        prev = cur;
+                    }
+                }
+            }
+        }
+        // Build the page from the (possibly just-navigated) snapshot.
+        {
+            nlohmann::json r;
+            nlohmann::json loop = nlohmann::json::array();
+            size_t total = 0, from = (size_t)std::max(0, start), to = 0;
+            std::vector<RemoteBrowseItem> rows;
+            bool not_root = false;
+            if (control_) {
+                auto s = control_->snapshot_state();
+                rows = std::move(s.browse);
+                not_root = !rows.empty() && rows[0].depth > 0;
+            }
+            total = rows.size() + (not_root ? 1 : 0);
+            to = total;
+            if (window > 0)
+                to = std::min(to, from + (size_t)window);
+            for (size_t p = from; p < to; ++p) {
+                nlohmann::json it;
+                nlohmann::json go;
+                if (not_root && p == 0) {
+                    it["text"] = "..";
+                    go["cmd"] = nlohmann::json::array({"panicast", "browse", "back"});
+                } else {
+                    const auto &row = rows[not_root ? p - 1 : p];
+                    it["text"] = row.subtext.empty() ? row.title : row.title + "\n" + row.subtext;
+                    if (!row.art_url.empty())
+                        it["icon"] = row.art_url;
+                    go["cmd"] = nlohmann::json::array(
+                        {"panicast", "browse", std::to_string(not_root ? p - 1 : p)});
+                }
+                it["actions"] = nlohmann::json({{"go", go}});
+                loop.push_back(it);
+            }
+            r["count"] = (int)total;
+            r["offset"] = start > 0 ? start : 0;
+            r["item_loop"] = loop;
+            return r;
+        }
     } else if (k == "menu") {
         // Home-menu request (`menu 0 <n> direct:1` at connect) — Squeeze Client's
-        //   MAIN screen renders this list. One entry: browse the current playlist
-        //   (go action cmd "status" → the browse view orders status pages, whose rows
-        //   carry per-item "playlist index" go actions from status_data). Requires
-        //   count/offset as JSON NUMBERS (JiveHomeItemListResponse: Int) and every
-        //   item needs id+node (Strings, no defaults).
-        nlohmann::json go;
-        go["cmd"] = nlohmann::json::array({"status"});
-        nlohmann::json item;
-        item["id"] = "currentplaylist";
-        item["node"] = "currentplaylist";
-        item["text"] = "Current Playlist";
-        item["weight"] = 1;
-        item["actions"] = nlohmann::json({{"go", go}});
+        //   MAIN screen renders this list. Two entries: the CURRENT mode's library
+        //   (browse mirror of the TUI list) and the current playlist (browse view of
+        //   the queue; rows carry per-item "playlist index" go actions from
+        //   status_data). Requires count/offset as JSON NUMBERS
+        //   (JiveHomeItemListResponse: Int) and every item needs id+node (Strings).
+        std::string mode_name = control_ ? control_->snapshot_state().mode : "LIBRARY";
         nlohmann::json r;
-        r["count"] = 1;
+        nlohmann::json loop = nlohmann::json::array();
+        {
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"panicast", "browse", "root"});
+            nlohmann::json item;
+            item["id"] = "library";
+            item["node"] = "library";
+            item["text"] = "panicast · " + mode_name;
+            item["weight"] = 1;
+            item["actions"] = nlohmann::json({{"go", go}});
+            loop.push_back(item);
+        }
+        {
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"status"});
+            nlohmann::json item;
+            item["id"] = "currentplaylist";
+            item["node"] = "currentplaylist";
+            item["text"] = "Current Playlist";
+            item["weight"] = 2;
+            item["actions"] = nlohmann::json({{"go", go}});
+            loop.push_back(item);
+        }
+        r["count"] = 2;
         r["offset"] = 0;
-        r["item_loop"] = nlohmann::json::array({item});
+        r["item_loop"] = loop;
         return r;
     } else if (k == "alarm" || k == "alarms") {
         nlohmann::json r;
@@ -989,10 +1117,12 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         r["alarms_loop"] = nlohmann::json::array();
         return r;
     } else if (std::find(cmd.begin(), cmd.end(), "items") != cmd.end() || k == "artists" ||
-               k == "albums" || k == "titles" || k == "genres" || k == "years" ||
-               k == "playlists" || k == "favorites" || k == "browsers" || k == "musicfolder") {
-        // Any browse-style query we don't serve → an empty page (NOT an empty object:
-        //   the ItemListener contract needs count/item_loop or the app spins).
+               k == "albums" || k == "titles" || k == "tracks" || k == "genres" || k == "years" ||
+               k == "playlists" || k == "favorites" || k == "browsers" || k == "musicfolder" ||
+               k == "sync" || k == "name") {
+        // Any browse-style query / single-player no-op we don't serve → an empty page
+        //   (NOT an empty object: the ItemListener contract needs count/item_loop or
+        //   the app spins).
         return empty_page();
     } else {
         LOG(fmt::format("[LMS-JSON] unhandled command: {}",
