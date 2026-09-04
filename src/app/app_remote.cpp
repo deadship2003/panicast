@@ -249,6 +249,64 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
         }
         return;
     }
+    // ── Queue jumps / edits (Squeezer playlist view: tap row, swipe-remove, drag-reorder) ──
+    if (a == "jump") { // play queue entry <idx> ("playlist index <N>" on the LMS plane)
+        int idx = std::atoi(arg0().c_str());
+        int size = static_cast<int>(playback_.playlist().size());
+        if (idx >= 0 && idx < size) {
+            playback_.play_current(idx, mode, play_mode);
+            EVENT_LOG(fmt::format("Remote: jump {}", idx));
+        } else {
+            EVENT_LOG(fmt::format("Remote: jump {} — out of range (queue {})", idx, size));
+        }
+        return;
+    }
+    if (a == "playlist_remove") { // "playlist delete <N>"
+        int idx = std::atoi(arg0().c_str());
+        std::lock_guard<std::mutex> lk(playback_.playlist_mutex());
+        auto &pl = playback_.playlist();
+        if (idx >= 0 && idx < static_cast<int>(pl.size())) {
+            pl.erase(pl.begin() + idx);
+            int cur = playback_.current_index();
+            if (cur > idx)
+                playback_.set_current_index(cur - 1);
+            else if (cur >= static_cast<int>(pl.size()))
+                playback_.set_current_index(static_cast<int>(pl.size()) - 1);
+            // Indices shifted → regenerate the SHUFFLE lookahead under the held lock.
+            playback_.shuffle_queue().clear();
+            playback_.refill_shuffle_queue();
+            EVENT_LOG(fmt::format("Remote: playlist remove {} ({} left)", idx, pl.size()));
+        }
+        return;
+    }
+    if (a == "playlist_move" && args.size() >= 2) { // "playlist move <from> <to>"
+        int from = std::atoi(args[0].c_str());
+        int to = std::atoi(args[1].c_str());
+        std::lock_guard<std::mutex> lk(playback_.playlist_mutex());
+        auto &pl = playback_.playlist();
+        if (from >= 0 && from < static_cast<int>(pl.size()) && to >= 0 &&
+            to < static_cast<int>(pl.size()) && from != to) {
+            PlaylistItem it = pl[from];
+            pl.erase(pl.begin() + from);
+            pl.insert(pl.begin() + to, it);
+            // Keep the playing pointer on the same ENTRY as it slides.
+            int cur = playback_.current_index();
+            auto reindex = [&](int i) {
+                if (i == from)
+                    return to;
+                if (from < to && i > from && i <= to)
+                    return i - 1;
+                if (from > to && i >= to && i < from)
+                    return i + 1;
+                return i;
+            };
+            playback_.set_current_index(reindex(cur));
+            playback_.shuffle_queue().clear();
+            playback_.refill_shuffle_queue();
+            EVENT_LOG(fmt::format("Remote: playlist move {} -> {}", from, to));
+        }
+        return;
+    }
     // ── Seek (forwarded to mpv) ──
     if (a == "seek" || a == "seekto" || a == "seek_percent") {
         if (args.empty()) {
@@ -275,6 +333,15 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
         }
         player.set_volume(std::atoi(args[0].c_str()));
         EVENT_LOG(fmt::format("Remote: volume={}", args[0]));
+        return;
+    }
+    if (a == "volume_rel") { // Squeezer's hardware-volume keys ("mixer volume +5/-5")
+        if (args.empty()) {
+            EVENT_LOG("Remote: volume_rel needs <+/-delta>");
+            return;
+        }
+        player.set_volume(player.get_state().volume + std::atoi(args[0].c_str()));
+        EVENT_LOG(fmt::format("Remote: volume {}", args[0]));
         return;
     }
     if (a == "volume_up") {

@@ -104,7 +104,12 @@ private:
     std::string handle_http(Conn &c, const std::string &method, const std::string &path,
                             const std::string &headers, const std::string &body);
     nlohmann::json json_slim_request(Conn &c, const std::vector<std::string> &cmd);
-    nlohmann::json status_data(); // shared by status replies and connect-time pushes
+    // Shared status builder. start < 0 → "current song" shape (item_loop[0] = playing track,
+    //   what parsePlayerStatus builds the CurrentPlaylistItem from; also the push payload).
+    //   start >= 0 → "playlist page" shape (Squeezer's CurrentPlaylistActivity orders
+    //   `status <start> <window> menu:menu` pages): item_loop = jive items [start,
+    //   start+window), count = total tracks. window <= 0 → everything from start.
+    nlohmann::json status_data(int start = -1, int window = 0);
     void reap_done(); // join + drop finished conns (conns_mtx_ held)
     bool peer_allowed(const sockaddr_storage &peer) const; // lms_allow CIDR check
 
@@ -117,19 +122,19 @@ private:
     std::string bind_addr_;
 
     // Access policy, parsed once at start() from [remote] lms_allow / lms_user / lms_pass.
-    std::vector<LmsCidr> allow_;    // empty + !allow_all_ = nothing gets in (defensive)
-    bool allow_all_ = false;        // lms_allow explicitly empty
+    std::vector<LmsCidr> allow_; // empty + !allow_all_ = nothing gets in (defensive)
+    bool allow_all_ = false;     // lms_allow explicitly empty
     std::string lms_user_;
     std::string lms_pass_;
-    bool auth_required_ = false;    // non-empty lms_pass → Basic auth gate
+    bool auth_required_ = false; // non-empty lms_pass → Basic auth gate
 
     std::thread accept_thread_;
 
     // Push-state (server-global, NOT per-Conn: the app spreads requests over several
     //   sockets, so subscription state and last-push bookkeeping must survive across
     //   connections — keyed by Bayeux clientId).
-    std::atomic<bool> any_subscribed_{false};      // any status interest seen
-    std::mutex push_mtx_;                          // guards last_push_by_cid_
+    std::atomic<bool> any_subscribed_{false};             // any status interest seen
+    std::mutex push_mtx_;                                 // guards last_push_by_cid_
     std::map<std::string, std::string> last_push_by_cid_; // cid → last pushed dump
 
     std::mutex conns_mtx_;

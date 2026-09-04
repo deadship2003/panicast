@@ -126,8 +126,7 @@ bool ct_equal(const std::string &a, const std::string &b) {
 
 // Minimal base64 decode (standard alphabet) for HTTP Basic auth.
 std::string b64decode(const std::string &in) {
-    static const char tbl[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    static const char tbl[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     auto dv = [&](char c) -> int {
         const char *p = std::strchr(tbl, c);
         return (c && p) ? (int)(p - tbl) : -1;
@@ -186,8 +185,7 @@ bool LmsServer::start(const std::string &bind_addr, int port, RemoteControlInter
     LOG(fmt::format("[LMS] mini-LMS (Squeezer cometd control plane) listening on {}:{} — point "
                     "Squeezer at <this host>:{}",
                     bind_addr, port, port));
-    LOG(fmt::format("[LMS] allowlist: {} | Basic auth: {}",
-                    allow_all_ ? "ALL sources" : allow_csv,
+    LOG(fmt::format("[LMS] allowlist: {} | Basic auth: {}", allow_all_ ? "ALL sources" : allow_csv,
                     auth_required_ ? fmt::format("on (user '{}')", lms_user_) : "off"));
     return true;
 }
@@ -379,10 +377,9 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
                                    const std::string &headers, const std::string &body) {
     auto http_resp = [](int code, const char *status, const std::string &b,
                         const char *extra = "") {
-        return fmt::format(
-            "HTTP/1.1 {} {}\r\nContent-Type: application/json;charset=UTF-8\r\n"
-            "Content-Length: {}\r\nConnection: keep-alive\r\n{}\r\n{}",
-            code, status, b.size(), extra, b);
+        return fmt::format("HTTP/1.1 {} {}\r\nContent-Type: application/json;charset=UTF-8\r\n"
+                           "Content-Length: {}\r\nConnection: keep-alive\r\n{}\r\n{}",
+                           code, status, b.size(), extra, b);
     };
     auto header_val = [&](const std::string &key) -> std::string {
         // Search case-insensitively on a lowered COPY, but slice the ORIGINAL string —
@@ -452,12 +449,11 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
                 //   and answering ["long-polling"] made it abort right after the
                 //   handshake (observed as handshake → /meta/disconnect). Our per-POST
                 //   reply pattern satisfies any of these types.
-                j["supportedConnectionTypes"] =
-                    (m.contains("supportedConnectionTypes") &&
-                     m["supportedConnectionTypes"].is_array() &&
-                     !m["supportedConnectionTypes"].empty())
-                        ? m["supportedConnectionTypes"]
-                        : nlohmann::json::array({"long-polling"});
+                j["supportedConnectionTypes"] = (m.contains("supportedConnectionTypes") &&
+                                                 m["supportedConnectionTypes"].is_array() &&
+                                                 !m["supportedConnectionTypes"].empty())
+                                                    ? m["supportedConnectionTypes"]
+                                                    : nlohmann::json::array({"long-polling"});
                 j["clientId"] = fmt::format("lc{:016x}", next_cid.fetch_add(1));
                 j["id"] = id;
                 out.push_back(j);
@@ -499,7 +495,8 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
                         last_push_by_cid_[m_cid] = st;
                     }
                 }
-            } else if (ch.rfind("/meta/subscribe", 0) == 0 || ch.rfind("/meta/unsubscribe", 0) == 0) {
+            } else if (ch.rfind("/meta/subscribe", 0) == 0 ||
+                       ch.rfind("/meta/unsubscribe", 0) == 0) {
                 nlohmann::json j;
                 j["channel"] = ch;
                 j["successful"] = true;
@@ -582,9 +579,12 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
 }
 
 // Shared status builder: the object returned for slim "status" requests AND pushed on
-//   /meta/connect replies when the state changed (bidirectional sync). Shaped for
-//   BaseClient.parseStatus + parsePlayerStatus (item_loop[0] = current song).
-nlohmann::json LmsServer::status_data() {
+//   /meta/connect replies when the state changed (bidirectional sync). Two shapes:
+//   start < 0 → BaseClient.parseStatus + parsePlayerStatus (item_loop[0] = current song);
+//   start >= 0 → Squeezer's playlist-page view (CurrentPlaylistActivity → JiveItemListener
+//   parses "count" + "item_loop" jive records — without a count the app renders an EMPTY
+//   playlist and stops paging, which is exactly the "list won't load" symptom).
+nlohmann::json LmsServer::status_data(int start, int window) {
     nlohmann::json r;
     if (!control_)
         return r;
@@ -602,7 +602,23 @@ nlohmann::json LmsServer::status_data() {
     // LMS spellings the app reads (BaseClient.parseStatus) — space in the key names:
     r["playlist repeat"] = "0";
     r["playlist shuffle"] = "0";
-    r["playlist_timestamp"] = "0";
+    // Content hash, not a constant: Squeezer fires PlaylistChanged (clear + re-order the
+    //   list view) only when playlist_timestamp CHANGES — a constant hides queue edits.
+    {
+        uint64_t h = 1469598103934665603ull; // FNV-1a over size + titles + durations
+        auto mix = [&](const std::string &v) {
+            for (unsigned char c : v) {
+                h ^= c;
+                h *= 1099511628211ull;
+            }
+        };
+        mix(S((int)s.playlist.size()));
+        for (const auto &it : s.playlist) {
+            mix(it.title);
+            mix(S(it.duration));
+        }
+        r["playlist_timestamp"] = std::to_string(h);
+    }
     r["playlist_name"] = "";
     r["will_sleep_in"] = "0";
     r["sleep"] = "0";
@@ -616,7 +632,8 @@ nlohmann::json LmsServer::status_data() {
     r["duration"] = S((int)s.duration);
     r["canseek"] = "1";
     r["digital_volume_control"] = "1";
-    r["mixer volume"] = S(s.volume); // LMS keeps the space in the JSON key
+    r["mixer volume"] = S(s.volume);        // LMS keeps the space in the JSON key
+    r["count"] = S((int)s.playlist.size()); // JiveItemListener's pagination total
     if (s.has_media) {
         r["current_title"] = s.title;
         r["title"] = s.title;
@@ -632,10 +649,30 @@ nlohmann::json LmsServer::status_data() {
         item["duration"] = S((int)s.duration);
         if (!s.art_url.empty())
             item["artwork_url"] = s.art_url;
-        r["item_loop"] = nlohmann::json::array({item});
+        if (start < 0)
+            r["item_loop"] = nlohmann::json::array({item}); // current-song shape
     }
-    // The queue (Squeezer's playlist view): LMS delivers it as playlist_loop inside the
-    //   status response — the app does not fetch it anywhere else.
+    if (start >= 0) {
+        // Playlist-page shape: jive records for the requested window. The app renders
+        //   "text" ('\n' splits name/second line), skips records carrying sub-menus or
+        //   inputs, and selects by ADAPTER POSITION → playlist index <N> (CurrentPlaylist-
+        //   ItemView.onItemSelected), so a plain text+id record per queue entry is exactly
+        //   the contract.
+        nlohmann::json loop = nlohmann::json::array();
+        size_t from = (size_t)std::max(0, start);
+        size_t to = s.playlist.size();
+        if (window > 0)
+            to = std::min(to, from + (size_t)window);
+        for (size_t i = from; i < to; ++i) {
+            nlohmann::json it;
+            it["id"] = S((int)i);
+            it["text"] = s.playlist[i].title;
+            it["offset"] = S((int)i);
+            loop.push_back(it);
+        }
+        r["item_loop"] = loop;
+    }
+    // The queue in LMS's flat spelling (kept for CLI tools / songinfo parity).
     nlohmann::json loop = nlohmann::json::array();
     for (size_t i = 0; i < s.playlist.size() && i < 200; ++i) {
         nlohmann::json it;
@@ -650,7 +687,8 @@ nlohmann::json LmsServer::status_data() {
 }
 
 // JSON-RPC command mapping — LMS-JSON shaped: stringly-typed values, players_loop array
-//   for player listings, flat status object.
+//   for player listings, flat status object. The surface mirrors what Squeezer actually
+//   sends (verified against its source: SqueezeService.java builds these cmd arrays).
 nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::string> &cmd) {
     if (cmd.empty())
         return nlohmann::json::object();
@@ -663,6 +701,19 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         if (bus_)
             bus_->push({action, {arg}, c.client_id});
     };
+    auto push_args = [&](const char *action, const std::string &a1, const std::string &a2) {
+        if (bus_)
+            bus_->push({action, {a1, a2}, c.client_id});
+    };
+    auto empty_page = [&]() { // browse-shaped "no content": count 0 + empty item_loop
+        nlohmann::json r;
+        r["count"] = "0";
+        r["item_loop"] = nlohmann::json::array();
+        return r;
+    };
+    // Trailing int arg helper ("playlist index 5 2" — the trailing 2 is Squeezer's
+    //   fadeInSecs; LMS tolerates and ignores unknown trailing params, we do too).
+    auto int_arg = [&](size_t i) -> int { return i < cmd.size() ? std::atoi(cmd[i].c_str()) : 0; };
 
     if (k == "players" || k == "serverstatus") {
         nlohmann::json p;
@@ -687,7 +738,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         auto add_prefs = [&](const std::string &prefix, nlohmann::json &target) {
             static const std::map<std::string, nlohmann::json> defaults = {
                 {"mediadirs", nlohmann::json::array()}, // ARRAY — a String "" crashes the
-                                                       // app's (Object[]) cast in Util
+                                                        // app's (Object[]) cast in Util
                 {"defeatDestructiveTouchToPlay", "0"},
                 {"defeatDestru", "0"}, // truncated form seen on the wire
                 {"digitalVolumeControl", "1"},
@@ -723,13 +774,20 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         add_prefs("prefs:", r);
         add_prefs("playerprefs:", p); // FLAT in the player record — Player.java reads
                                       // record.get(prefName), not a nested object
-        p["ip"] = "127.0.0.1";         // Player.java reads it (cosmetic, but it parses it)
+        p["ip"] = "127.0.0.1";        // Player.java reads it (cosmetic, but it parses it)
         r["players_loop"] = nlohmann::json::array({p}); // AFTER all p mutations (copies!)
         return r;
     }
     if (k == "status") {
         any_subscribed_.store(true); // any status interest enables connect-time pushes
-        return status_data();
+        // Window args: "status - 1 ..." = current-song probe / subscription; "status
+        //   <start> <window> ..." = a playlist page ordered by CurrentPlaylistActivity
+        //   (pluginItems → JiveItemListener → count + item_loop).
+        int start = -1;
+        if (cmd.size() > 1 && cmd[1] != "-")
+            start = std::atoi(cmd[1].c_str());
+        int window = cmd.size() > 2 ? std::atoi(cmd[2].c_str()) : 0;
+        return status_data(start, window);
     }
     if (k == "songinfo") { // current-track details for the now-playing screen
         nlohmann::json r;
@@ -761,6 +819,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         // Remote-control intuition: resume if something is loaded (paused or playing);
         //   only fall through to "play the tree cursor node" when nothing is loaded —
         //   the bare "play" action is Enter-on-cursor, which surprised phone users.
+        //   Squeezer sends "play" (from stop) or "play <fade>" (togglePausePlay).
         if (control_) {
             auto st = control_->snapshot_state();
             if (st.has_media) {
@@ -771,6 +830,8 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         }
         push("play");
     } else if (k == "pause") {
+        // Squeezer always sends the explicit form ("pause 1" / "pause 0 [fade]") —
+        //   it refuses ambiguous toggles (see SqueezeService.togglePausePlay).
         std::string want = cmd.size() > 1 ? cmd[1] : "";
         if (want == "1")
             push("pause");
@@ -780,10 +841,31 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             push("play_pause");
     } else if (k == "stop") {
         push("stop");
+    } else if (k == "power") {
+        // Squeezer's power button toggles ("power" bare from the now-playing screen,
+        //   explicit 0/1 from player settings). We mirror it onto pause state — the
+        //   queue survives a power-off, like a stopped Squeezebox.
+        std::string want = cmd.size() > 1 ? cmd[1] : "";
+        if (want == "0")
+            push("pause");
+        else if (want == "1")
+            push("resume");
+        else
+            push("play_pause");
     } else if (k == "next") {
         push("next");
     } else if (k == "prev") {
         push("previous");
+    } else if (k == "button" && cmd.size() > 1) {
+        // IR-button spellings Squeezer's repeat/shuffle buttons send. LMS cycles
+        //   through 2-3 modes per press; our PlayMode is a tri-state the remote
+        //   already exposes ("repeat"/"shuffle" actions) — set, don't cycle.
+        if (cmd[1] == "shuffle")
+            push("shuffle");
+        else if (cmd[1] == "repeat")
+            push("repeat");
+        else
+            LOG(fmt::format("[LMS-JSON] unhandled button: {}", cmd[1]));
     } else if (k == "playlist" && cmd.size() > 1) {
         const std::string &sub = cmd[1];
         if (sub == "index" && cmd.size() > 2) {
@@ -791,18 +873,76 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 push("next");
             else if (cmd[2] == "-1")
                 push("previous");
+            else {
+                // "playlist index <N> [fade]" — tapping row N in the playlist view.
+                //   THE cursor move: without it Squeezer taps do nothing.
+                int n = std::atoi(cmd[2].c_str());
+                if (n >= 0)
+                    push_arg("jump", std::to_string(n));
+            }
+        } else if (sub == "jump") { // alt spelling, same semantics
+            int n = int_arg(2);
+            if (n >= 0)
+                push_arg("jump", std::to_string(n));
         } else if (sub == "next") {
             push("next");
         } else if (sub == "prev") {
             push("previous");
+        } else if (sub == "delete" && cmd.size() > 2) { // swipe-to-remove on a row
+            push_arg("playlist_remove", cmd[2]);
+        } else if (sub == "move" && cmd.size() > 3) { // drag-to-reorder
+            push_args("playlist_move", cmd[2], cmd[3]);
+        } else if (sub == "clear") {
+            push("queue_clear");
+        } else if (sub == "save" && cmd.size() > 2) {
+            LOG(fmt::format("[LMS-JSON] playlist save '{}' — not supported (queue is "
+                            "derived from the tree, not persisted)",
+                            cmd[2]));
+        } else {
+            LOG(fmt::format("[LMS-JSON] unhandled playlist subcommand: {}",
+                            fmt::join(cmd.begin(), cmd.end(), " ")));
         }
     } else if (k == "mixer" && cmd.size() > 1) {
-        if (cmd[1] == "volume" && cmd.size() > 2 && cmd[2] != "?")
-            push_arg("volume", cmd[2]);
+        if (cmd[1] == "volume") {
+            if (cmd.size() > 2 && cmd[2] == "?") {
+                // Query form: Squeezer's mixer response handler reads "_volume" and
+                //   RE-SENDS the query when it's absent — never leave it out.
+                nlohmann::json r;
+                r["_volume"] = std::to_string(control_ ? control_->snapshot_state().volume : 0);
+                return r;
+            }
+            if (cmd.size() > 2 && cmd[2] != "?") {
+                const std::string &v = cmd[2];
+                if (!v.empty() && (v[0] == '+' || v[0] == '-'))
+                    push_arg("volume_rel", v); // relative step ("+5"/"-5")
+                else
+                    push_arg("volume", v);
+            }
+        }
         // muting unsupported → accept silently
     } else if (k == "time") {
         if (cmd.size() > 1 && cmd[1] != "?")
             push_arg("seekto", cmd[1]);
+    } else if (k == "playerpref" || k == "pref" || k == "setting") {
+        // Squeezer writes player prefs (e.g. alarm volume) — acknowledge, don't apply.
+        return nlohmann::json::object();
+    } else if (k == "menu") {
+        // Home-menu request (`menu 0 <n> direct:1` on connect). No server-side browse
+        //   tree: answer a well-formed empty menu so the drawer renders instead of
+        //   wedging the serialized command queue. The playlist is reachable from the
+        //   now-playing screen.
+        return empty_page();
+    } else if (k == "alarm" || k == "alarms") {
+        nlohmann::json r;
+        r["count"] = "0";
+        r["alarms_loop"] = nlohmann::json::array();
+        return r;
+    } else if (std::find(cmd.begin(), cmd.end(), "items") != cmd.end() || k == "artists" ||
+               k == "albums" || k == "titles" || k == "genres" || k == "years" ||
+               k == "playlists" || k == "favorites" || k == "browsers" || k == "musicfolder") {
+        // Any browse-style query we don't serve → an empty page (NOT an empty object:
+        //   the ItemListener contract needs count/item_loop or the app spins).
+        return empty_page();
     } else {
         LOG(fmt::format("[LMS-JSON] unhandled command: {}",
                         fmt::join(cmd.begin(), cmd.end(), " ")));
