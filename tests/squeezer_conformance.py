@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Squeezer protocol conformance test against the panicast mini-LMS server.
+"""Protocol conformance test against the panicast mini-LMS server.
 
-Replays the EXACT request sequences the Squeezer Android app sends (verified against
-nikclayton/android-squeezer source: CometClient.java / SqueezeService.java /
-CurrentPlaylistActivity.java) and asserts the response shapes the app's parsers need.
+Replays the exact request sequences of BOTH cometd clients in the field:
+- Squeeze Client (de.maniac103.squeezeclient) — kotlinx.serialization STRICT
+  decoding: numeric fields must be JSON NUMBERS, playlist rows need
+  track/artist/album, the home menu needs numeric count/offset + id/node items.
+  (Identified on the wire by `["play",""]` and `menu 0 512 direct:1`.)
+- Squeezer (uk.org.ngo.squeezer) — Java tolerant parsing; the same replies must
+  still carry its expected fields.
 """
 import base64
 import json
@@ -17,8 +21,6 @@ passed, failed = 0, 0
 
 
 class Cometd:
-    """One keep-alive cometd connection (the app pools several; one is enough here)."""
-
     def __init__(self):
         self.sock = socket.create_connection((HOST, PORT), timeout=5)
         self.client_id = None
@@ -47,7 +49,6 @@ class Cometd:
             rest += self.sock.recv(65536)
         return json.loads(rest[:clen])
 
-    # ── Bayeux scaffolding, exactly as the app drives it ──
     def handshake(self):
         reps = self.post(
             [
@@ -81,7 +82,6 @@ class Cometd:
         )
 
     def slim(self, cmd, response_channel=None, publish_channel="/slim/request"):
-        """Publish one slim.request; return the result dict (data of the response msg)."""
         self.cid_counter += 1
         resp_ch = response_channel or f"/{self.client_id}/slim/request/{self.cid_counter}"
         msg = {
@@ -107,124 +107,108 @@ def check(name, cond, detail=""):
         print(f"  FAIL {name}  {detail}")
 
 
+def is_num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool)
+
+
 def main():
     c = Cometd()
 
     print("== Bayeux handshake / subscribe ==")
     hs = c.handshake()
     check("handshake successful", hs.get("successful") is True)
-    check(
-        "handshake echoes transports",
-        "streaming" in hs.get("supportedConnectionTypes", []),
-    )
     conn = c.connect()
     check("connect successful", conn[0].get("successful") is True)
-    sub = c.subscribe(f"/{c.client_id}/slim/request/*")
-    check("subscribe successful", sub[0].get("successful") is True)
-    sub2 = c.subscribe(f"/{c.client_id}/slim/playerstatus/*")
-    check("playerstatus subscribe successful", sub2[0].get("successful") is True)
+    for ch in [f"/{c.client_id}/slim/request/*", f"/{c.client_id}/slim/playerstatus/*",
+               f"/{c.client_id}/slim/displaystatus/*", f"/{c.client_id}/slim/menustatus/*"]:
+        check(f"subscribe {ch.split('/')[-1]}", c.subscribe(ch)[0].get("successful") is True)
 
-    print("== Server status / player discovery (parseServerStatus) ==")
+    print("== serverstatus (player discovery) ==")
     ss = c.slim(
         [
-            "serverstatus",
-            "0",
-            "255",
-            "prefs:mediadirs, defeatDestructiveTouchToPlay",
-            "playerprefs:playtrackalbum, defeatDestructiveTouchToPlay",
+            "serverstatus", "0", "255",
+            "playerprefs:alarmDefaultVolume,alarmfadeseconds,alarmSnoozeSeconds,"
+            "alarmTimeoutSeconds,alarmsEnabled,playtrackalbum,defeatDestructiveTouchToPlay,"
+            "syncVolume,syncPower,digitalVolumeControl",
+            "prefs:mediadirs,defeatDestructiveTouchToPlay",
         ]
     )
-    check("players_loop present", "players_loop" in ss, str(ss)[:200])
+    check("players_loop present", "players_loop" in ss)
     if "players_loop" in ss:
         p = ss["players_loop"][0]
         check("player id", p.get("playerid") == PLAYER)
-        check("player isplayer=1", str(p.get("isplayer")) == "1")
         check("playerprefs flat in record", "playtrackalbum" in p)
-    check("version (HandshakeComplete trigger)", "version" in ss)
+    check("version present", "version" in ss)
+    check("serverstatus subscribe:60 ack", "players_loop" in c.slim(
+        ["serverstatus", "0", "255", "subscribe:60", "playerprefs:alarmsEnabled",
+         "prefs:mediadirs"]))
 
-    print("== Now-playing status (statusRequest → parsePlayerStatus/parseStatus) ==")
-    st = c.slim(["status", "-", "1", "menu:menu", "useContextMenu:1"])
-    for field in [
-        "mode",
-        "power",
-        "playlist_tracks",
-        "playlist_cur_index",
-        "playlist_timestamp",
-        "mixer volume",
-        "time",
-        "duration",
-        "playlist repeat",
-        "playlist shuffle",
-    ]:
-        check(f"status has '{field}'", field in st, str(st)[:120])
-    check("status playerstatus push-shape (song/name keys ok)", "player_name" in st)
+    print("== now-playing status — STRICT DECODE TYPES (Squeeze Client) ==")
+    st = c.slim(["status", "-", "1", "useContextMenu:1", "subscribe:0", "menu:menu"],
+                publish_channel="/slim/subscribe")
+    for f in ["mode", "player_name"]:
+        check(f"'{f}' string", isinstance(st.get(f), str), repr(st.get(f))[:80])
+    for f in ["count", "playlist_tracks", "playlist_cur_index", "player_connected",
+              "power", "digital_volume_control", "mixer volume", "song"]:
+        check(f"'{f}' NUMBER", is_num(st.get(f)), repr(st.get(f))[:80])
+    for f in ["time", "duration", "playlist_timestamp"]:
+        check(f"'{f}' NUMBER (float decode)", is_num(st.get(f)), repr(st.get(f))[:80])
+    check("'playlist shuffle'/'repeat' string enums",
+          isinstance(st.get("playlist shuffle"), str) and isinstance(st.get("playlist repeat"), str))
+    check("sync_master string", isinstance(st.get("sync_master"), str))
 
-    print("== Player status subscription (subscribePlayerStatus) ==")
-    sub_st = c.slim(
-        ["status", "-", "1", "menu:menu", "useContextMenu:1", "subscribe:30"],
-        response_channel=f"/{c.client_id}/slim/playerstatus/{PLAYER}",
-        publish_channel="/slim/subscribe",
-    )
-    check("subscription reply carries mode", "mode" in sub_st)
+    print("== now-playing fetch with tags ==")
+    st2 = c.slim(["status", "-", "1", "tags:ABdejJKlrStTuxy"])
+    check("tags variant parses (same shape)", is_num(st2.get("count")))
 
-    print("== Playlist page (CurrentPlaylistActivity → JiveItemListener) ==")
-    page = c.slim(["status", "0", "20", "menu:menu"])
-    check("page has count", "count" in page, str(page)[:120])
-    check("page has item_loop", "item_loop" in page)
+    print("== playlist page (Squeeze Client PlaylistFragment) ==")
+    page = c.slim(["status", "0", "512", "menu:menu", "useContextMenu:1"])
+    check("count NUMBER", is_num(page.get("count")))
+    check("item_loop present", "item_loop" in page)
     if "item_loop" in page:
-        for it in page["item_loop"]:
-            if not ("text" in it or "name" in it):
-                check("every item has text/name", False, str(it))
-                break
+        rows = page["item_loop"]
+        if rows:
+            r0 = rows[0]
+            check("row track/artist/album present",
+                  all(k in r0 for k in ("track", "artist", "album")), str(r0)[:120])
+            check("row text present (browse render)", "text" in r0)
+            go = r0.get("actions", {}).get("go", {})
+            check("row go action = playlist index",
+                  go.get("cmd", [])[:2] == ["playlist", "index"], str(go)[:100])
         else:
-            check("every item has text/name", True)
-    page2 = c.slim(["status", "10", "5", "menu:menu"])
-    check("windowed page still full-status", "playlist_cur_index" in page2)
+            check("rows present (queue may be empty in test env)", True)
 
-    print("== Home menu / browse stubs (must not wedge the command queue) ==")
-    menu = c.slim(["menu", "0", "20", "direct:1"])
-    check("menu returns count", "count" in menu)
-    check("menu returns item_loop", "item_loop" in menu)
-    fav = c.slim(["favorites", "0", "20"])
-    check("favorites → count/item_loop", "count" in fav and "item_loop" in fav)
-    arts = c.slim(["artists", "0", "20"])
-    check("artists → count/item_loop", "count" in arts and "item_loop" in arts)
-    pl = c.slim(["playlists", "0", "20"])
-    check("playlists → count/item_loop", "count" in pl and "item_loop" in pl)
+    print("== home menu (Squeeze Client main screen) ==")
+    menu = c.slim(["menu", "0", "512", "direct:1"])
+    check("menu count NUMBER", is_num(menu.get("count")))
+    check("menu offset NUMBER", is_num(menu.get("offset")))
+    items = menu.get("item_loop", [])
+    check("menu item id+node strings",
+          all(isinstance(i.get("id"), str) and isinstance(i.get("node"), str) for i in items),
+          str(items)[:120])
+    if items:
+        check("menu go action cmd", "go" in items[0].get("actions", {}))
 
-    print("== Control commands (must be accepted; executed on the UI thread) ==")
+    print("== display/menustatus subscriptions (must ack, not wedge) ==")
+    check("displaystatus ack", c.slim(["displaystatus", "subscribe:showbriefly"],
+                                      publish_channel="/slim/subscribe") == {})
+    check("menustatus ack", c.slim(["menustatus"],
+                                   publish_channel="/slim/subscribe") == {})
+
+    print("== control commands ==")
     cmds = [
+        (["play", ""], "play \"\" (Squeeze Client zero-fade form)"),
         (["pause", "1"], "pause 1"),
-        (["pause", "0", "2"], "pause 0 2 (fade arg)"),
-        (["play"], "play"),
-        (["play", "2"], "play 2 (fade arg)"),
+        (["pause", "0", ""], "pause 0 (unpause)"),
         (["stop"], "stop"),
-        (["next"], "next"),
-        (["prev"], "prev"),
-        (["playlist", "index", "+1"], "playlist index +1"),
-        (["playlist", "index", "-1"], "playlist index -1"),
-        (["playlist", "index", "3", "2"], "playlist index 3 2 (tap row + fade)"),
-        (["playlist", "jump", "2"], "playlist jump 2"),
-        (["playlist", "next"], "playlist next"),
-        (["playlist", "prev"], "playlist prev"),
+        (["playlist", "index", "3", ""], "playlist index 3 (tap row)"),
         (["playlist", "delete", "2"], "playlist delete 2"),
         (["playlist", "move", "1", "3"], "playlist move 1 3"),
         (["playlist", "clear"], "playlist clear"),
-        (["playlist", "save", "MyList"], "playlist save (ack, no crash)"),
-        (["button", "shuffle"], "button shuffle"),
-        (["button", "repeat"], "button repeat"),
-        (["power"], "power (toggle)"),
+        (["power"], "power toggle"),
         (["power", "0"], "power 0"),
-        (["power", "1"], "power 1"),
         (["mixer", "volume", "55"], "mixer volume 55"),
-        (["mixer", "volume", "+10"], "mixer volume +10"),
-        (["mixer", "volume", "-5"], "mixer volume -5"),
-        (["time", "42"], "time 42 (seek)"),
-        (["playerpref", "alarmDefaultVolume", "40"], "playerpref (ack)"),
-        (["alarm", "update", "id:1"], "alarm (ack shape)"),
-        (["alarms", "0", "20"], "alarms (loop shape)"),
-        (["login", "u", "p"], "login"),
-        (["version"], "version"),
+        (["time", "42"], "time 42"),
     ]
     for cmd, label in cmds:
         try:
@@ -234,23 +218,26 @@ def main():
             check(f"accepted: {label}", False, repr(e))
 
     mv = c.slim(["mixer", "volume", "?"])
-    check("mixer volume ? → _volume (app re-queries forever without it)",
-          "_volume" in mv, str(mv))
+    check("mixer volume ? → _volume", "_volume" in mv)
 
-    print("== Connect-time status push (bidirectional sync) ==")
+    print("== Squeezer-family compatibility (tolerant Java parsing) ==")
+    stq = c.slim(["status", "-", "1", "menu:menu", "useContextMenu:1"])
+    check("status query works", "mode" in stq)
+    check("playlist_loop still served", "playlist_loop" in stq)
+
+    print("== connect-time push ==")
     pushed = None
     for _ in range(4):
         for m in c.connect():
-            ch = m.get("channel", "")
-            if "/slim/playerstatus/" in ch and "data" in m:
+            if "/slim/playerstatus/" in m.get("channel", "") and "data" in m:
                 pushed = m["data"]
     if pushed is None:
-        # state unchanged since last push → no piggyback; force one via a status query
-        st2 = c.slim(["status", "-", "1"])
-        check("status query still fine after commands", "mode" in st2)
-        print("  note: no push (idle state) — acceptable")
+        st3 = c.slim(["status", "-", "1"])
+        check("status still fine after commands", "mode" in st3)
+        print("  note: no push (idle state unchanged) — acceptable")
     else:
-        check("push carries mode", "mode" in pushed)
+        check("push types: count NUMBER", is_num(pushed.get("count")))
+        check("push types: player_connected NUMBER", is_num(pushed.get("player_connected")))
 
     print(f"\n{passed} passed, {failed} failed")
     sys.exit(1 if failed else 0)

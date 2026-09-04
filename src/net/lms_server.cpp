@@ -579,11 +579,22 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
 }
 
 // Shared status builder: the object returned for slim "status" requests AND pushed on
-//   /meta/connect replies when the state changed (bidirectional sync). Two shapes:
-//   start < 0 → BaseClient.parseStatus + parsePlayerStatus (item_loop[0] = current song);
-//   start >= 0 → Squeezer's playlist-page view (CurrentPlaylistActivity → JiveItemListener
-//   parses "count" + "item_loop" jive records — without a count the app renders an EMPTY
-//   playlist and stops paging, which is exactly the "list won't load" symptom).
+//   /meta/connect replies when the state changed (bidirectional sync).
+//
+//   JSON TYPES MATTER (Squeeze Client, de.maniac103.squeezeclient): it decodes with
+//   kotlinx.serialization in STRICT mode (coerceInputValues + ignoreUnknownKeys, no
+//   isLenient) — PlayerStatusResponse.count is Int, time/duration are Float,
+//   player_connected/power use a decodeInt() serializer, playlist_timestamp decodes a
+//   DOUBLE. A quoted "4" in any of those makes the WHOLE response fail to decode and
+//   the app renders nothing. Real LMS numeric-coerces exactly these fields; so do we:
+//   numbers where the parsers declare numbers, strings only for the enum/string
+//   fields ("mode", "playlist shuffle/repeat", names, ids). Old-Squeezer-style Java
+//   parsers (Util.getInt/getDouble) accept both, so nothing regresses there.
+//
+//   item_loop entries carry track/artist/album (Squeeze Client's
+//   PlayerStatusResponse.Item DROPS the item when any of the three is null — the
+//   now-playing bar and every playlist row vanished without them) plus text/actions
+//   for the jive browse rendering of the same response.
 nlohmann::json LmsServer::status_data(int start, int window) {
     nlohmann::json r;
     if (!control_)
@@ -591,19 +602,20 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     auto s = control_->snapshot_state();
     const char *mode = !s.has_media ? "stop" : (s.paused ? "pause" : "play");
     int idx = std::max(0, s.current_index);
-    auto S = [](int v) { return std::to_string(v); };
     r["player_name"] = player_name();
-    r["player_connected"] = "1";
+    r["player_connected"] = 1;
     r["playerid"] = player_id();
-    r["power"] = "1";
+    r["power"] = 1;
     r["mode"] = mode;
-    r["playlist_tracks"] = S((int)s.playlist.size());
-    r["playlist_cur_index"] = S(idx);
-    // LMS spellings the app reads (BaseClient.parseStatus) — space in the key names:
+    r["playlist_tracks"] = (int)s.playlist.size();
+    r["playlist_cur_index"] = idx;
+    // Enum strings — the Squeezer family reads these as strings ("0"/"1"/"2").
     r["playlist repeat"] = "0";
     r["playlist shuffle"] = "0";
-    // Content hash, not a constant: Squeezer fires PlaylistChanged (clear + re-order the
-    //   list view) only when playlist_timestamp CHANGES — a constant hides queue edits.
+    // Content-keyed epoch timestamp (DOUBLE on the wire). Squeeze Client's
+    //   PlaylistFragment re-fetches the list when playlist_timestamp CHANGES; a
+    //   constant hides queue edits. Cache: same content → same timestamp (change
+    //   detection by equality stays exact even when edits ping-pong).
     {
         uint64_t h = 1469598103934665603ull; // FNV-1a over size + titles + durations
         auto mix = [&](const std::string &v) {
@@ -612,52 +624,65 @@ nlohmann::json LmsServer::status_data(int start, int window) {
                 h *= 1099511628211ull;
             }
         };
-        mix(S((int)s.playlist.size()));
+        mix(std::to_string(s.playlist.size()));
         for (const auto &it : s.playlist) {
             mix(it.title);
-            mix(S(it.duration));
+            mix(std::to_string(it.duration));
         }
-        r["playlist_timestamp"] = std::to_string(h);
+        static std::mutex ts_mtx;
+        static uint64_t last_hash = 0;
+        static double last_ts = 0;
+        std::lock_guard<std::mutex> lk(ts_mtx);
+        if (h != last_hash || last_ts == 0) {
+            last_hash = h;
+            last_ts = (double)std::time(nullptr);
+        }
+        r["playlist_timestamp"] = last_ts;
     }
     r["playlist_name"] = "";
-    r["will_sleep_in"] = "0";
-    r["sleep"] = "0";
-    r["remote"] = "1";
+    r["will_sleep_in"] = 0;
+    r["sleep"] = 0;
+    r["remote"] = 1;
     r["sync_master"] = "";
     r["sync_slaves"] = "";
-    r["song"] = S(idx);
-    r["seq_no"] = "0";
-    r["rate"] = "1";
-    r["time"] = S((int)s.elapsed);
-    r["duration"] = S((int)s.duration);
-    r["canseek"] = "1";
-    r["digital_volume_control"] = "1";
-    r["mixer volume"] = S(s.volume);        // LMS keeps the space in the JSON key
-    r["count"] = S((int)s.playlist.size()); // JiveItemListener's pagination total
+    r["song"] = idx;
+    r["seq_no"] = 0;
+    r["rate"] = 1;
+    r["time"] = s.elapsed;
+    r["duration"] = s.duration;
+    r["canseek"] = 1;
+    r["digital_volume_control"] = 1;
+    r["mixer volume"] = s.volume; // LMS keeps the space in the JSON key
+    r["count"] = (int)s.playlist.size();
+    // NOTE: no "offset" — PlayerStatusResponse declares it String? while the browse
+    //   decoders declare Int; omitting satisfies both (defaults cover it).
     if (s.has_media) {
         r["current_title"] = s.title;
         r["title"] = s.title;
         if (!s.art_url.empty())
             r["art_url"] = s.art_url;
-        // item_loop[0] is what parsePlayerStatus builds the CurrentPlaylistItem from.
+        // item_loop[0] = current song (parsePlayerStatus / asModelStatus build the
+        //   now-playing item from it).
         nlohmann::json item;
-        item["id"] = S(idx);
+        item["id"] = idx;
+        item["track"] = s.title;
         item["title"] = s.title;
-        item["track"] = "";
         item["artist"] = "";
         item["album"] = "";
-        item["duration"] = S((int)s.duration);
-        if (!s.art_url.empty())
+        item["duration"] = s.duration;
+        if (!s.art_url.empty()) {
+            item["icon"] = s.art_url;
             item["artwork_url"] = s.art_url;
+        }
         if (start < 0)
             r["item_loop"] = nlohmann::json::array({item}); // current-song shape
     }
     if (start >= 0) {
-        // Playlist-page shape: jive records for the requested window. The app renders
-        //   "text" ('\n' splits name/second line), skips records carrying sub-menus or
-        //   inputs, and selects by ADAPTER POSITION → playlist index <N> (CurrentPlaylist-
-        //   ItemView.onItemSelected), so a plain text+id record per queue entry is exactly
-        //   the contract.
+        // Playlist-page shape (Squeeze Client's PlaylistFragment pages through
+        //   PlayerStatusRequest; the jive browse view renders the same reply). One
+        //   record per queue entry: track/artist/album for the playlist decoders,
+        //   text for the browse renderer, and a per-row go action ("play this row
+        //   now") for the browse click path.
         nlohmann::json loop = nlohmann::json::array();
         size_t from = (size_t)std::max(0, start);
         size_t to = s.playlist.size();
@@ -665,27 +690,32 @@ nlohmann::json LmsServer::status_data(int start, int window) {
             to = std::min(to, from + (size_t)window);
         for (size_t i = from; i < to; ++i) {
             nlohmann::json it;
-            it["id"] = S((int)i);
+            it["id"] = (int)i;
+            it["track"] = s.playlist[i].title;
             it["text"] = s.playlist[i].title;
-            it["offset"] = S((int)i);
+            it["artist"] = "";
+            it["album"] = "";
+            it["duration"] = s.playlist[i].duration;
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"playlist", "index", std::to_string(i)});
+            it["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(it);
         }
         r["item_loop"] = loop;
     }
-    // The queue in LMS's flat spelling (kept for CLI tools / songinfo parity).
+    // The queue in LMS's flat spelling (kept for old-Squeezer SongListener / CLI parity).
     nlohmann::json loop = nlohmann::json::array();
     for (size_t i = 0; i < s.playlist.size() && i < 200; ++i) {
         nlohmann::json it;
-        it["playlist index"] = S((int)i);
-        it["id"] = S((int)i);
+        it["playlist index"] = std::to_string(i);
+        it["id"] = std::to_string(i);
         it["title"] = s.playlist[i].title;
-        it["duration"] = S(s.playlist[i].duration);
+        it["duration"] = std::to_string(s.playlist[i].duration);
         loop.push_back(it);
     }
     r["playlist_loop"] = loop;
     return r;
 }
-
 // JSON-RPC command mapping — LMS-JSON shaped: stringly-typed values, players_loop array
 //   for player listings, flat status object. The surface mirrors what Squeezer actually
 //   sends (verified against its source: SqueezeService.java builds these cmd arrays).
@@ -705,9 +735,10 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         if (bus_)
             bus_->push({action, {a1, a2}, c.client_id});
     };
-    auto empty_page = [&]() { // browse-shaped "no content": count 0 + empty item_loop
+    auto empty_page = [&]() { // browse-shaped "no content": count/offset NUMBERS + empty item_loop
         nlohmann::json r;
-        r["count"] = "0";
+        r["count"] = 0;
+        r["offset"] = 0;
         r["item_loop"] = nlohmann::json::array();
         return r;
     };
@@ -780,9 +811,10 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
     }
     if (k == "status") {
         any_subscribed_.store(true); // any status interest enables connect-time pushes
-        // Window args: "status - 1 ..." = current-song probe / subscription; "status
-        //   <start> <window> ..." = a playlist page ordered by CurrentPlaylistActivity
-        //   (pluginItems → JiveItemListener → count + item_loop).
+        // Window args: "status - 1 ..." = current-song probe / subscription push shape;
+        //   "status <start> <window> ..." = a playlist page — Squeeze Client's
+        //   PlaylistFragment (PlayerStatusRequest + PlayerStatusResponse → item_loop
+        //   rows) and the jive browse view of the same reply.
         int start = -1;
         if (cmd.size() > 1 && cmd[1] != "-")
             start = std::atoi(cmd[1].c_str());
@@ -791,7 +823,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
     }
     if (k == "songinfo") { // current-track details for the now-playing screen
         nlohmann::json r;
-        r["count"] = "0";
+        r["count"] = 0;
         r["songinfo_loop"] = nlohmann::json::array();
         if (control_) {
             auto s = control_->snapshot_state();
@@ -799,11 +831,11 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 nlohmann::json it;
                 it["id"] = std::to_string(std::max(0, s.current_index));
                 it["title"] = s.title;
-                it["duration"] = std::to_string((int)s.duration);
+                it["duration"] = s.duration;
                 if (!s.art_url.empty())
                     it["art_url"] = s.art_url;
                 r["songinfo_loop"] = nlohmann::json::array({it});
-                r["count"] = "1";
+                r["count"] = 1;
             }
         }
         return r;
@@ -926,15 +958,34 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
     } else if (k == "playerpref" || k == "pref" || k == "setting") {
         // Squeezer writes player prefs (e.g. alarm volume) — acknowledge, don't apply.
         return nlohmann::json::object();
+    } else if (k == "displaystatus" || k == "menustatus") {
+        // Display/menu push subscriptions (Squeeze Client subscribes both at connect).
+        //   Nothing to push — acknowledge the subscribe so the app's serialized
+        //   command queue keeps flowing.
+        return nlohmann::json::object();
     } else if (k == "menu") {
-        // Home-menu request (`menu 0 <n> direct:1` on connect). No server-side browse
-        //   tree: answer a well-formed empty menu so the drawer renders instead of
-        //   wedging the serialized command queue. The playlist is reachable from the
-        //   now-playing screen.
-        return empty_page();
+        // Home-menu request (`menu 0 <n> direct:1` at connect) — Squeeze Client's
+        //   MAIN screen renders this list. One entry: browse the current playlist
+        //   (go action cmd "status" → the browse view orders status pages, whose rows
+        //   carry per-item "playlist index" go actions from status_data). Requires
+        //   count/offset as JSON NUMBERS (JiveHomeItemListResponse: Int) and every
+        //   item needs id+node (Strings, no defaults).
+        nlohmann::json go;
+        go["cmd"] = nlohmann::json::array({"status"});
+        nlohmann::json item;
+        item["id"] = "currentplaylist";
+        item["node"] = "currentplaylist";
+        item["text"] = "Current Playlist";
+        item["weight"] = 1;
+        item["actions"] = nlohmann::json({{"go", go}});
+        nlohmann::json r;
+        r["count"] = 1;
+        r["offset"] = 0;
+        r["item_loop"] = nlohmann::json::array({item});
+        return r;
     } else if (k == "alarm" || k == "alarms") {
         nlohmann::json r;
-        r["count"] = "0";
+        r["count"] = 0;
         r["alarms_loop"] = nlohmann::json::array();
         return r;
     } else if (std::find(cmd.begin(), cmd.end(), "items") != cmd.end() || k == "artists" ||
