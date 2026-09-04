@@ -30,9 +30,13 @@ static void print_usage() {
     std::cout << "By " << panicast::AUTHOR << " <" << panicast::EMAIL << "> @"
               << panicast::BUILD_TIME << "\n\n";
     std::cout << "Usage:\n";
-    std::cout << "  panicast                  Start the application (TUI mode)\n";
-    std::cout << "  panicast -d, --daemon     Run the headless daemon (same engine, no TUI;\n";
-    std::cout << "                            foreground — Ctrl+C exits cleanly)\n";
+    std::cout << "  panicast                  Start the application (TUI mode; first run\n";
+    std::cout << "                            auto-installs the user-space background\n";
+    std::cout << "                            service — sudo-free, see `panicast status`)\n";
+    std::cout << "  panicast start|stop|restart|enable|disable   Manage the background\n";
+    std::cout << "                            service (user systemd unit; no sudo needed)\n";
+    std::cout << "  panicast status           Service + playback status\n";
+    std::cout << "  panicast log [-n N]       Tail today's log and FOLLOW it (Ctrl+C exits)\n";
     std::cout << "  panicast -a <url>         Add feed from URL\n";
     std::cout << "  panicast -i <file>        Import OPML subscriptions\n";
     std::cout << "  panicast -e <file>        Export to OPML file\n";
@@ -103,7 +107,9 @@ int main(int argc, char *argv[]) {
     bool purge = false;
     bool quiet_mode = false; /* --quiet = pure audio (vid=no, vo=null) */
 
-    /* CLI long options: --daemon, --purge, --quiet, --vid, --vo, --ao, --help, --version */
+    /* CLI long options: --purge, --quiet, --vid, --vo, --ao, --help, --version.
+       (--daemon stays as an INTERNAL long option: the user service unit's ExecStart
+       uses it — nobody types it. The -d short form is gone per N10.3.) */
     static struct option long_options[] = {{"daemon", no_argument, 0, 'd'},
                                            {"purge", no_argument, 0, 'P'},
                                            {"quiet", no_argument, 0, 'q'},
@@ -115,12 +121,12 @@ int main(int argc, char *argv[]) {
                                            {0, 0, 0, 0}};
 
     std::string cli_vo, cli_vid, cli_ao; /* CLI overrides (empty = use defaults) */
-    bool daemon_mode = false;            /* N10: -d → headless foreground daemon */
+    bool daemon_mode = false; /* --daemon (internal): headless daemon for the service unit */
 
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:i:e:t:dh?v", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:i:e:t:h?v", long_options, &option_index)) != -1) {
         switch (opt) {
-        case 'd':
+        case 'd': // internal (--daemon only; reached from the systemd unit's ExecStart)
             daemon_mode = true;
             break;
         case 'a':
@@ -264,6 +270,11 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     } else {
+        // N10.3: FIRST-RUN AUTO-SERVICE — install/refresh the user-space unit before
+        //   anything else (sudo-free; ExecStart = this binary). The handover-restore
+        //   on exit then starts it, so one `panicast` run leaves the background
+        //   service installed AND running for Squeeze Client.
+        panicast::ensure_user_unit();
         // N10.2: single-instance engine ownership. One TUI session at a time — the
         //   engine (mpv + queue + DB) has exactly one owner; a second TUI would race
         //   the first exactly like a second daemon would.

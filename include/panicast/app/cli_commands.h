@@ -1,18 +1,23 @@
-// panicast CLI service subcommands (N09/S1, unit renamed in N10): status / start /
-//   stop / restart / enable / disable / log [-f]. Dispatched from main() before the TUI
-//   path. The daemon is `panicast -d` (systemd unit panicast.service, ExecStart=panicast
-//   -d); start/stop/restart go through systemctl directly (the S1-3 polkit rule allows
-//   the owning user passwordless), while enable/disable deliberately require the user's
-//   sudo (explicit opt-in to autostart).
+// panicast CLI service subcommands (N09/S1 → N10.3): status / start / stop / restart /
+//   enable / disable / log. Dispatched from main() before the TUI path. The daemon is a
+//   USER-space systemd unit (~/.config/systemd/user/panicast.service, ExecStart=<this
+//   binary> --daemon) — every verb goes through `systemctl --user`, so NO sudo/polkit
+//   is involved anywhere. `panicast log` tails today's log and FOLLOWS it
+//   (journalctl -fu semantics; -n N sets the history depth).
 #pragma once
 
 namespace panicast
 {
 
-// N10.2: stop the daemon for the TUI session (systemctl via the S1-3 polkit rule;
-//   SIGTERM by pidfile when a manually started `panicast -d` survives systemctl —
-//   e.g. unit not installed). The daemon's clean exit persists player state, which
-//   the TUI then restores. Returns true when a daemon was stopped.
+// N10.3: install/refresh the USER-space systemd unit (~/.config/systemd/user/
+//   panicast.service, ExecStart=<this binary> --daemon). Auto-called on the first TUI
+//   run and by `panicast start` — user units need no sudo anywhere.
+void ensure_user_unit();
+
+// N10.2: stop the daemon for the TUI session (N10.3: `systemctl --user stop`; a
+//   pre-N10.3 SYSTEM unit and a manually started daemon are stopped too — the latter
+//   by pidfile SIGTERM). The daemon's clean exit persists player state, which the
+//   TUI then restores. Returns true when a daemon was stopped.
 bool service_handover_takeover();
 
 // Restart the daemon after the TUI exits (N10.1 semantics: the service is running

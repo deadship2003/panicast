@@ -89,7 +89,7 @@ int run_daemon() {
     //   and the SQLite writes. Refuse instead of racing.
     if (daemon_pid_alive()) {
         std::fprintf(stderr,
-                     "panicast -d: another daemon instance is already running (pid file "
+                     "panicast --daemon: another daemon instance is already running (pid file "
                      "%s).\nUse `panicast status` to inspect it, or `panicast restart` "
                      "to recycle it.\n",
                      daemon_pidfile_path().c_str());
@@ -99,7 +99,7 @@ int run_daemon() {
     //   and restarts this service on its way out — starting alongside it would race
     //   mpv and the DB from behind the user's back.
     if (tui_pid_alive()) {
-        std::fprintf(stderr, "panicast -d: a TUI session owns playback right now — exit it "
+        std::fprintf(stderr, "panicast --daemon: a TUI session owns playback right now — exit it "
                              "first.\n(It restarts the background service automatically when it "
                              "exits.)\n");
         return 1;
@@ -128,10 +128,10 @@ int run_daemon() {
         try {
             app.run();
         } catch (const std::exception &e) {
-            std::fprintf(stderr, "panicast -d: fatal: %s\n", e.what());
+            std::fprintf(stderr, "panicast --daemon: fatal: %s\n", e.what());
             rc = 1;
         } catch (...) {
-            std::fprintf(stderr, "panicast -d: fatal: unknown exception\n");
+            std::fprintf(stderr, "panicast --daemon: fatal: unknown exception\n");
             rc = 1;
         }
     } // ~App joins everything before the pid file disappears

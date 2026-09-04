@@ -2,6 +2,7 @@
 #include "panicast/app/cli_commands.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
@@ -25,14 +26,15 @@ namespace panicast
 
 namespace
 {
-// N10: the unit runs `panicast -d` (formerly the separate panicastd binary, N09/S1 —
-//   unit renamed panicastd.service → panicast.service with it).
+// N10: the unit runs `panicast --daemon`. N10.3: it is a USER unit — every verb goes
+//   through `systemctl --user`, so no sudo/polkit is involved anywhere.
 const char *UNIT = "panicast.service";
 
-int systemctl(const char *verb, bool use_sudo) {
-    std::string cmd = use_sudo ? "sudo " : "";
-    cmd += std::string("systemctl ") + verb + " " + UNIT;
-    return ::system(cmd.c_str());
+int systemctl(const char *verb, bool) {
+    std::string cmd = std::string("systemctl --user ") + verb + " " + UNIT;
+    // ::system() returns the RAW wait status (256 per exit-code unit) — the process
+    //   exit code would be truncated (& 0xFF); normalize to 0/1.
+    return ::system(cmd.c_str()) == 0 ? 0 : 1;
 }
 
 std::string today_log_path() {
@@ -132,8 +134,8 @@ int cmd_status() {
     printf("panicast daemon: %s", alive ? "running" : "stopped");
     if (alive)
         printf(" (pid %d)", pid);
-    else if (::system(("systemctl is-enabled " + std::string(UNIT) + " >/dev/null 2>&1").c_str()) ==
-             0)
+    else if (::system(("systemctl --user is-enabled " + std::string(UNIT) + " >/dev/null 2>&1")
+                          .c_str()) == 0)
         printf(" [enabled]");
     printf("\n");
     if (tui_pid_alive(&pid)) {
@@ -182,12 +184,14 @@ int cmd_status() {
 }
 
 int cmd_log(int argc, char **argv) {
-    bool follow = false;
+    // journalctl -fu behaviour BY DEFAULT: print the tail, then keep following —
+    //   interacting with the TUI/daemon keeps producing lines. History depth via -n N;
+    //   -f/--follow accepted as an explicit no-op. Ctrl+C exits.
     int tail_n = 20;
     for (int i = 2; i < argc; ++i) {
         std::string a = argv[i];
         if (a == "-f" || a == "--follow")
-            follow = true;
+            ; // already the default
         else if (a == "-n" && i + 1 < argc)
             tail_n = std::atoi(argv[++i]);
     }
@@ -201,8 +205,6 @@ int cmd_log(int argc, char **argv) {
         lines.erase(lines.begin(), lines.end() - tail_n);
     for (auto &s : lines)
         printf("%s\n", s.c_str());
-    if (!follow)
-        return 0;
     // journalctl -f equivalent: poll the file (handles the midnight rollover by
     //   re-resolving the "today" name each second).
     fflush(stdout);
@@ -233,14 +235,16 @@ bool service_handover_takeover() {
     int pid = 0;
     if (!daemon_pid_alive(&pid))
         return false;
-    std::string stop_cmd = "systemctl stop " + std::string(UNIT) + " 2>/dev/null";
-    if (::system(stop_cmd.c_str()) != 0) { // no polkit rule yet — sudo fallback
-        std::string sudo_cmd = "sudo systemctl stop " + std::string(UNIT);
-        ::system(sudo_cmd.c_str());
-    }
-    // N10.2: a MANUALLY started `panicast -d` (unit inactive, pidfile alive) survives
-    //   the systemctl attempt — stop it by pid so the same clean-exit flush runs
-    //   (SIGTERM is exactly what systemd sends).
+    // N10.3: the service lives in the USER manager — no auth needed. A pre-N10.3
+    //   install may still run the SYSTEM unit (with its polkit rule); stop that too
+    //   before the pidfile fallback so a migration-era daemon can't survive beside
+    //   the TUI.
+    ::system(("systemctl --user stop " + std::string(UNIT) + " 2>/dev/null").c_str());
+    if (daemon_pid_alive())
+        ::system(("systemctl stop " + std::string(UNIT) + " 2>/dev/null").c_str());
+    // N10.2: a MANUALLY started daemon (unit inactive, pidfile alive) survives both
+    //   attempts — stop it by pid so the same clean-exit flush runs (SIGTERM is
+    //   exactly what systemd sends).
     if (daemon_pid_alive())
         ::kill(pid, SIGTERM);
     // Wait for the daemon to finish its clean shutdown (bounded; it takes ~2-3s).
@@ -253,8 +257,72 @@ bool service_handover_takeover() {
 }
 
 void service_handover_restore() {
-    std::string start_cmd = "systemctl start " + std::string(UNIT) + " 2>/dev/null";
-    ::system(start_cmd.c_str());
+    // N10.3: user unit — start needs no privileges. If the user manager isn't
+    //   available (no session), this fails silently; the next `panicast start` or
+    //   TUI session retries.
+    ::system(("systemctl --user start " + std::string(UNIT) + " 2>/dev/null").c_str());
+}
+
+// N10.3: install (or refresh) the USER-space service unit — the whole point is that
+//   NO sudo is ever needed: the unit lives under $XDG_CONFIG_HOME (~/.config), and
+//   start/stop/enable go through `systemctl --user`. ExecStart points at the RUNNING
+//   binary (via /proc/self/exe) so the service always runs the installed build.
+//   Called on the first TUI run (auto-setup) and by `panicast start`.
+void ensure_user_unit() {
+    const char *home = std::getenv("HOME");
+    const char *xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base = xdg && *xdg ? std::string(xdg) : std::string(home ? home : "") + "/.config";
+    if (base.empty())
+        return;
+    std::string dir = base + "/systemd/user";
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec)
+        return;
+    char self[4096];
+    ssize_t n = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
+    std::string exe = n > 0 ? std::string(self, (size_t)n) : "/usr/local/bin/panicast";
+    std::string unit = std::string("# panicast user-space service (installed automatically by ") +
+                       "the first run — N10.3).\n"
+                       "#   Manage with: panicast start|stop|restart|enable|disable (all "
+                       "sudo-free, systemctl --user).\n"
+                       "[Unit]\n"
+                       "Description=panicast headless media daemon (Squeeze Client remote)\n"
+                       "After=network.target\n"
+                       "\n"
+                       "[Service]\n"
+                       "Type=simple\n"
+                       "ExecStart=" +
+                       exe +
+                       " --daemon\n"
+                       "Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer\n"
+                       "WorkingDirectory=" +
+                       std::string(home ? home : "") +
+                       "\n"
+                       "Restart=on-failure\n"
+                       "RestartSec=3\n"
+                       "# The daemon's clean shutdown (mpv stop joins) takes ~2-3s.\n"
+                       "TimeoutStopSec=15\n"
+                       "\n"
+                       "[Install]\n"
+                       "WantedBy=default.target\n";
+    std::string path = dir + "/" + UNIT;
+    std::string existing;
+    {
+        std::ifstream f(path);
+        std::string l;
+        while (std::getline(f, l))
+            existing += l + "\n";
+    }
+    if (existing == unit)
+        return; // already current — no write, no daemon-reload churn
+    {
+        std::ofstream f(path);
+        if (!f.is_open())
+            return;
+        f << unit;
+    }
+    ::system("systemctl --user daemon-reload 2>/dev/null");
 }
 
 int run_cli_command(int argc, char *argv[]) {
@@ -263,14 +331,21 @@ int run_cli_command(int argc, char *argv[]) {
     std::string cmd = argv[1];
     if (cmd == "status")
         return cmd_status();
-    if (cmd == "start")
+    if (cmd == "start") {
+        ensure_user_unit();
         return cmd_start();
+    }
     if (cmd == "stop")
         return systemctl("stop", false);
-    if (cmd == "restart")
+    if (cmd == "restart") {
+        ensure_user_unit();
         return systemctl("restart", false);
-    if (cmd == "enable" || cmd == "disable")
-        return systemctl(cmd.c_str(), true); // deliberate sudo: autostart is explicit opt-in
+    }
+    // N10.3: enable/disable of a USER unit needs no sudo — it's a file in $XDG_CONFIG_HOME.
+    if (cmd == "enable" || cmd == "disable") {
+        ensure_user_unit();
+        return systemctl(cmd.c_str(), false);
+    }
     if (cmd == "log")
         return cmd_log(argc, argv);
     return -1;

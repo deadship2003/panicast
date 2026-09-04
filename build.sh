@@ -228,37 +228,28 @@ install_panicast() {
     install_daemon_units
 }
 
-# N09/S1→N10: systemd unit (system-level, runs as the invoking user) + polkit rule
-#   granting that user passwordless start/stop/restart (enable/disable stay sudo-only).
+# N10.3: the daemon is a USER-space unit (~/.config/systemd/user/panicast.service) —
+#   the binary installs/refreshes it itself on first run (ensure_user_unit), so this
+#   hook only MIGRATES away the pre-N10.3 system-level unit + polkit rule (needs the
+#   one-time sudo this script already uses for /usr/local/bin).
 install_daemon_units() {
-    local user="${SUDO_USER:-$(id -un)}"
-    local home_dir
-    home_dir="$(getent passwd "$user" | cut -d: -f6)"
-    [ -n "$home_dir" ] || { warn "cannot resolve home for $user — skipping daemon units"; return; }
-
-    # N10 migration: retire the old panicastd unit (stop + remove); the new unit is
-    #   panicast.service running `panicast -d`.
+    # N10 → N10.3 migration: retire the system-level panicast(-d) units and the polkit
+    #   rule; the replacement user unit appears on the next `panicast` run.
+    if [ -f /etc/systemd/system/panicast.service ]; then
+        sudo systemctl stop panicast.service 2>/dev/null
+        sudo systemctl disable panicast.service 2>/dev/null
+        sudo rm -f /etc/systemd/system/panicast.service
+        say "removed system-level unit -> panicast.service (replaced by a user unit)"
+    fi
     if [ -f /etc/systemd/system/panicastd.service ]; then
         sudo systemctl stop panicastd.service 2>/dev/null
         sudo systemctl disable panicastd.service 2>/dev/null
         sudo rm -f /etc/systemd/system/panicastd.service
         say "removed legacy unit -> panicastd.service"
     fi
-    [ -f /etc/polkit-1/rules.d/49-panicastd.rules ] && sudo rm -f /etc/polkit-1/rules.d/49-panicastd.rules
-
-    sed -e "s|@INSTALL_USER@|$user|g" -e "s|@INSTALL_HOME@|$home_dir|g" \
-        scripts/panicast.service.in > /tmp/panicast.service
-    sudo cp -f /tmp/panicast.service /etc/systemd/system/panicast.service
-    sudo systemctl daemon-reload
-    say "systemd unit -> /etc/systemd/system/panicast.service (ExecStart=panicast -d)"
-
-    if [ -d /etc/polkit-1/rules.d ]; then
-        sed "s|@INSTALL_USER@|$user|g" scripts/49-panicast-polkit.rules.in \
-            > /tmp/49-panicast.rules
-        sudo cp -f /tmp/49-panicast.rules /etc/polkit-1/rules.d/49-panicast.rules
-        say "polkit rule  -> /etc/polkit-1/rules.d/49-panicast.rules (passwordless start/stop/restart)"
-    fi
-    echo "Enable autostart with: panicast enable   (or: sudo systemctl enable --now panicast)"
+    sudo rm -f /etc/polkit-1/rules.d/49-panicast.rules /etc/polkit-1/rules.d/49-panicastd.rules
+    echo "The background service is now a USER systemd unit — it installs itself on"
+    echo "the next panicast run (sudo-free). Enable autostart with: panicast enable"
 }
 
 do_install() {
