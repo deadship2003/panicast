@@ -85,13 +85,13 @@ std::string lms_status_reply() {
     }
     std::string auth = b64encode(IniConfig::instance().get_remote_lms_user() + ":" +
                                  IniConfig::instance().get_remote_lms_pass());
-    std::string body =
-        "[{\"channel\":\"/slim/request\",\"data\":{\"request\":"
-        "[\"00:00:00:00:84:21\",[\"status\",\"-\",\"1\"]],"
-        "\"response\":\"/cli/s\"}}]";
-    std::string req = "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " +
-                      auth + "\r\nContent-Type: text/json\r\nContent-Length: " +
-                      std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+    std::string body = "[{\"channel\":\"/slim/request\",\"data\":{\"request\":"
+                       "[\"00:00:00:00:84:21\",[\"status\",\"-\",\"1\"]],"
+                       "\"response\":\"/cli/s\"}}]";
+    std::string req =
+        "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " + auth +
+        "\r\nContent-Type: text/json\r\nContent-Length: " + std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body;
     if (::send(fd, req.data(), req.size(), MSG_NOSIGNAL) <= 0) {
         ::close(fd);
         return "";
@@ -115,6 +115,13 @@ int cmd_start() {
         printf("Use `panicast restart` to recycle it.\n");
         return 1;
     }
+    // N10.2: a TUI session owns the engine while it runs and restarts the service on
+    //   exit — starting the daemon beside it would race mpv and the DB.
+    if (tui_pid_alive(&pid)) {
+        printf("panicast daemon: a TUI session owns playback right now (pid %d).\n", pid);
+        printf("Exit the TUI first — it restarts the service automatically.\n");
+        return 1;
+    }
     return systemctl("start", false);
 }
 
@@ -125,9 +132,16 @@ int cmd_status() {
     printf("panicast daemon: %s", alive ? "running" : "stopped");
     if (alive)
         printf(" (pid %d)", pid);
-    else if (::system(("systemctl is-enabled " + std::string(UNIT) + " >/dev/null 2>&1").c_str()) == 0)
+    else if (::system(("systemctl is-enabled " + std::string(UNIT) + " >/dev/null 2>&1").c_str()) ==
+             0)
         printf(" [enabled]");
     printf("\n");
+    if (tui_pid_alive(&pid)) {
+        printf("panicast TUI:   running (pid %d) — owns playback; the service is handed "
+               "back on its exit\n",
+               pid);
+        return 0;
+    }
     if (!alive)
         return 0;
     // What is it playing? Ask the daemon's own LMS endpoint.
@@ -224,6 +238,11 @@ bool service_handover_takeover() {
         std::string sudo_cmd = "sudo systemctl stop " + std::string(UNIT);
         ::system(sudo_cmd.c_str());
     }
+    // N10.2: a MANUALLY started `panicast -d` (unit inactive, pidfile alive) survives
+    //   the systemctl attempt — stop it by pid so the same clean-exit flush runs
+    //   (SIGTERM is exactly what systemd sends).
+    if (daemon_pid_alive())
+        ::kill(pid, SIGTERM);
     // Wait for the daemon to finish its clean shutdown (bounded; it takes ~2-3s).
     for (int i = 0; i < 100; ++i) {
         if (!daemon_pid_alive())
@@ -255,24 +274,6 @@ int run_cli_command(int argc, char *argv[]) {
     if (cmd == "log")
         return cmd_log(argc, argv);
     return -1;
-}
-
-bool service_ensure_running() {
-    if (daemon_pid_alive())
-        return true;
-    if (systemctl("start", false) != 0) {
-        // Unit not installed / no polkit — the TUI still runs standalone.
-        std::fprintf(stderr,
-                     "panicast: could not start the background service (unit missing?) "
-                     "— continuing without it.\n");
-        return false;
-    }
-    for (int i = 0; i < 30; ++i) { // bounded wait for the pidfile (~3s)
-        if (daemon_pid_alive())
-            return true;
-        usleep(100 * 1000);
-    }
-    return false;
 }
 
 } // namespace panicast

@@ -104,12 +104,15 @@ int main(int argc, char *argv[]) {
     bool quiet_mode = false; /* --quiet = pure audio (vid=no, vo=null) */
 
     /* CLI long options: --daemon, --purge, --quiet, --vid, --vo, --ao, --help, --version */
-    static struct option long_options[] = {
-        {"daemon", no_argument, 0, 'd'},    {"purge", no_argument, 0, 'P'},
-        {"quiet", no_argument, 0, 'q'},     {"vid", required_argument, 0, 'V'},
-        {"vo", required_argument, 0, 'O'},  {"ao", required_argument, 0, 'A'},
-        {"help", no_argument, 0, 'h'},      {"version", no_argument, 0, 'v'},
-        {0, 0, 0, 0}};
+    static struct option long_options[] = {{"daemon", no_argument, 0, 'd'},
+                                           {"purge", no_argument, 0, 'P'},
+                                           {"quiet", no_argument, 0, 'q'},
+                                           {"vid", required_argument, 0, 'V'},
+                                           {"vo", required_argument, 0, 'O'},
+                                           {"ao", required_argument, 0, 'A'},
+                                           {"help", no_argument, 0, 'h'},
+                                           {"version", no_argument, 0, 'v'},
+                                           {0, 0, 0, 0}};
 
     std::string cli_vo, cli_vid, cli_ao; /* CLI overrides (empty = use defaults) */
     bool daemon_mode = false;            /* N10: -d → headless foreground daemon */
@@ -261,27 +264,42 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     } else {
+        // N10.2: single-instance engine ownership. One TUI session at a time — the
+        //   engine (mpv + queue + DB) has exactly one owner; a second TUI would race
+        //   the first exactly like a second daemon would.
+        if (int tui_pid = 0; panicast::tui_pid_alive(&tui_pid)) {
+            std::cerr << "panicast: another TUI session is already running (pid " << tui_pid
+                      << ") — exit it first." << std::endl;
+            return 1;
+        }
         App app;
-        // N10.1 (user-final): `panicast` implies the background service — when the daemon
-        //   is not running, bring it up FIRST, then take it over for the TUI session and
-        //   restore it on exit. Net effect: the service is running before AND after any
-        //   TUI session (failure to start it, e.g. unit not installed, is non-fatal).
-        service_ensure_running();
-        // N09/S1-4: single-instance session handover — stop the daemon (it persists
-        //   player state on its clean exit), run the TUI, restart the daemon afterwards.
-        took_over = service_handover_takeover();
+        // N09/S1-4 + N10.2: single-instance session handover — stop the daemon (it
+        //   persists player state on its clean exit), run the TUI, restart the daemon
+        //   afterwards. App::run() exits via _exit(0) (App::shutdown), which SKIPS
+        //   main's epilogue — so the restore (+ pidfile removal) rides the exit hook,
+        //   the same mechanism the daemon uses for its pidfile.
+        app.set_exit_hook([]() {
+            panicast::remove_tui_pidfile();
+            panicast::service_handover_restore();
+        });
+        took_over = panicast::service_handover_takeover();
+        panicast::write_tui_pidfile();
         // Wrap exceptions — any exception thrown by run() that reaches main triggers
         //   std::terminate/abort, skipping atexit(tui_cleanup) and leaving the terminal stuck in curses mode,
         //   and the App destructor won't run (thread pool not joined). Catch here, restore terminal, then exit.
         try {
             app.run();
         } catch (const std::exception &e) {
+            panicast::remove_tui_pidfile();
+            panicast::service_handover_restore(); // give the phone its remote back
             tui_cleanup();
             std::cerr << "Fatal error: " << e.what() << std::endl;
             curl_global_cleanup();
             xmlCleanupParser();
             return 1;
         } catch (...) {
+            panicast::remove_tui_pidfile();
+            panicast::service_handover_restore();
             tui_cleanup();
             std::cerr << "Fatal error: unknown exception" << std::endl;
             curl_global_cleanup();
@@ -290,6 +308,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
+    // Unreachable for the TUI path (App::run ends in _exit(0) — the exit hook covers
+    //   the handover restore); kept for the import/export CLI branch's fall-through.
     if (took_over)
         service_handover_restore();
 

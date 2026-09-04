@@ -38,6 +38,35 @@ bool daemon_pid_alive(int *out_pid) {
     return ::kill(pid, 0) == 0; // ESRCH → stale file, daemon is gone
 }
 
+// ── TUI session ownership (N10.2) ────────────────────────────────────────────
+//   Same pidfile-liveness pattern as the daemon side; see daemon_mode.h.
+std::string tui_pidfile_path() {
+    return Paths::get_data_dir() + "/panicast-tui.pid";
+}
+
+bool tui_pid_alive(int *out_pid) {
+    std::ifstream f(tui_pidfile_path());
+    int pid = 0;
+    if (!(f >> pid) || pid <= 0)
+        return false;
+    if (out_pid)
+        *out_pid = pid;
+    return ::kill(pid, 0) == 0;
+}
+
+void write_tui_pidfile() {
+    std::string p = tui_pidfile_path();
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path(p).parent_path(), ec);
+    std::ofstream f(p);
+    if (f.is_open())
+        f << getpid() << "\n";
+}
+
+void remove_tui_pidfile() {
+    std::remove(tui_pidfile_path().c_str());
+}
+
 namespace
 {
 void write_pidfile() {
@@ -64,6 +93,15 @@ int run_daemon() {
                      "%s).\nUse `panicast status` to inspect it, or `panicast restart` "
                      "to recycle it.\n",
                      daemon_pidfile_path().c_str());
+        return 1;
+    }
+    // N10.2: a TUI session owns the engine while it runs (session handover, N09/S1-4)
+    //   and restarts this service on its way out — starting alongside it would race
+    //   mpv and the DB from behind the user's back.
+    if (tui_pid_alive()) {
+        std::fprintf(stderr, "panicast -d: a TUI session owns playback right now — exit it "
+                             "first.\n(It restarts the background service automatically when it "
+                             "exits.)\n");
         return 1;
     }
 

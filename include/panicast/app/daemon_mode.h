@@ -22,9 +22,23 @@ std::string daemon_pidfile_path();
 // True when the pidfile names a live process. Stale files (dead pid) read as false.
 bool daemon_pid_alive(int *out_pid = nullptr);
 
+// ── TUI session ownership (single-instance, N10.2) ─────────────────────────────
+//   The engine (mpv + queue + DB) has exactly ONE owner at a time. The TUI writes
+//   its own pidfile so the daemon path (and a second TUI) can refuse instead of
+//   racing it — mirroring what daemon_pid_alive() does for the daemon side.
+std::string tui_pidfile_path();
+
+// True when a TUI session owns the engine. Stale files (dead pid) read as false.
+bool tui_pid_alive(int *out_pid = nullptr);
+
+// Write/remove the TUI pidfile. write creates the data dir if needed.
+void write_tui_pidfile();
+void remove_tui_pidfile();
+
 // Foreground headless mode behind `panicast -d / --daemon`. Returns the process exit
-//   code. Refuses to start when another daemon instance is already alive (double-run
-//   would fight over :9090, the mpv instance and the SQLite writes).
+//   code. Refuses to start when another daemon instance — or a TUI session — is
+//   already alive (double-run would fight over :9090, the mpv instance and the
+//   SQLite writes).
 int run_daemon();
 
 } // namespace panicast
