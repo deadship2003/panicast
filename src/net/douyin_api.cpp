@@ -7,6 +7,7 @@
 // All methods are synchronous curl calls — run them on a worker thread (they block on the network).
 #include "panicast/net/douyin_api.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <fstream>
@@ -33,9 +34,8 @@ static const char kXBogusAlphabet[] =
 
 // Fixed Chrome UA — the signing UA and the HTTP request UA must match (Douyin cross-checks).
 // The browser_*/os_* query params below are keyed to Chrome 150 on Windows to stay consistent.
-static const char *kDouyinUA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
+static const char *kDouyinUA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                               "(KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
 
 void DouyinApi::setSession(const std::string &cookieHeader, const std::string &userAgent) {
     cookie_ = cookieHeader;
@@ -150,10 +150,9 @@ std::string DouyinApi::computeXBogus(const std::string &urlParams) const {
     // upa: md5 hex of (md5 hex of url_params → bytes)
     std::vector<int> upa = md5StrToArray(md5HexOfArray(md5StrToArray(md5Hex(urlParams))));
 
-    long long ts =
-        std::chrono::duration_cast<std::chrono::seconds>(
-            std::chrono::system_clock::now().time_since_epoch())
-            .count();
+    long long ts = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
     const long long ct = 536919696;
 
     std::vector<int> newArr = {
@@ -204,11 +203,14 @@ std::string DouyinApi::computeXBogus(const std::string &urlParams) const {
     static const std::vector<unsigned char> finalKey = {0xff};
     auto enc = rc4(finalKey, y);
 
-    std::vector<unsigned char> garbled;
-    garbled.reserve(enc.size() + 2);
-    garbled.push_back(2);
-    garbled.push_back(255);
-    garbled.insert(garbled.end(), enc.begin(), enc.end());
+    // Sized construction (resize + copy) instead of reserve+push_back: GCC 14's
+    //   -Wfree-nonheap-object fires a false positive on the inlined realloc-append
+    //   path of push_back-after-reserve here (deallocate "on pointer with nonzero
+    //   offset" for a provably-heap pointer).
+    std::vector<unsigned char> garbled(enc.size() + 2);
+    garbled[0] = 2;
+    garbled[1] = 255;
+    std::copy(enc.begin(), enc.end(), garbled.begin() + 2);
 
     // custom base64: 3 bytes → 4 chars over the Douyin alphabet
     std::string xb;
@@ -287,8 +289,8 @@ std::string DouyinApi::signedGet(const std::string &endpoint, const std::string 
 // Parse one line of a Netscape/curl cookie file (7 whitespace-separated fields:
 //   domain  flag  path  secure  expiry  name  value). Returns false for comments/blank lines.
 // Handles curl's "#HttpOnly_" domain prefix (curl writes HttpOnly cookies that way).
-static bool parse_cookie_line(const std::string &line, std::string &domain,
-                              std::string &name, std::string &value) {
+static bool parse_cookie_line(const std::string &line, std::string &domain, std::string &name,
+                              std::string &value) {
     std::istringstream ls(line);
     std::string d, f1, f2, f3, f4, n, v;
     if (!(ls >> d >> f1 >> f2 >> f3 >> f4 >> n))
@@ -391,8 +393,7 @@ std::string DouyinApi::build_cookie_header_from_txt(const std::string &cookies_t
 // ── API methods ───────────────────────────────────────────────────────────────────
 
 // 接口A: query/user — logged-in user's numeric uid
-void DouyinApi::fetchMyUserId(
-    std::function<void(const std::string &, const std::string &)> cb) {
+void DouyinApi::fetchMyUserId(std::function<void(const std::string &, const std::string &)> cb) {
     std::string err;
     std::string params =
         "device_platform=webapp&aid=6383&channel=channel_pc_web&cookie_enabled=true"
@@ -462,7 +463,8 @@ void DouyinApi::fetchFollowing(const std::string &userId, int offset, int count,
     std::string params =
         "device_platform=webapp&aid=6383&channel=channel_pc_web&user_id=" + userId +
         "&offset=" + std::to_string(offset) + "&limit=" + std::to_string(count) +
-        "&address_book_access=0&gps_access=0&source_type=10&sec_user_id=&publish_video_strategy_type=2"
+        "&address_book_access=0&gps_access=0&source_type=10&sec_user_id=&publish_video_strategy_"
+        "type=2"
         "&cookie_enabled=true&browser_language=zh-CN&browser_platform=Win32"
         "&browser_name=Chrome&browser_version=150.0.0.0&browser_online=true"
         "&engine_name=Blink&engine_version=150.0.0.0&os_name=Windows&os_version=10"
@@ -491,13 +493,12 @@ void DouyinApi::fetchFollowing(const std::string &userId, int offset, int count,
             u.nickname = fu.value("nickname", "");
             u.signature = fu.value("signature", "");
             u.followerCount = fu.value("follower_count", 0);
-            u.avatarUrl = fu.value("avatar_thumb", json::object())
-                              .value("url_list", json::array())
-                              .empty()
-                              ? ""
-                              : fu.value("avatar_thumb", json::object())
-                                    .value("url_list", json::array())[0]
-                                    .get<std::string>();
+            u.avatarUrl =
+                fu.value("avatar_thumb", json::object()).value("url_list", json::array()).empty()
+                    ? ""
+                    : fu.value("avatar_thumb", json::object())
+                          .value("url_list", json::array())[0]
+                          .get<std::string>();
             out.users.push_back(std::move(u));
         }
         out.ok = true;
@@ -541,12 +542,10 @@ void DouyinApi::fetchUserVideos(const std::string &secUserId, long long maxCurso
             v.desc = aw.value("desc", "");
             auto video = aw.value("video", json::object());
             v.duration = video.value("duration", 0);
-            auto play = video.value("play_addr", json::object())
-                            .value("url_list", json::array());
+            auto play = video.value("play_addr", json::object()).value("url_list", json::array());
             if (!play.empty())
                 v.playUrl = play[0].get<std::string>();
-            auto cover = video.value("cover", json::object())
-                             .value("url_list", json::array());
+            auto cover = video.value("cover", json::object()).value("url_list", json::array());
             if (!cover.empty())
                 v.coverUrl = cover[0].get<std::string>();
             out.videos.push_back(std::move(v));
@@ -592,12 +591,10 @@ void DouyinApi::fetchUserLikes(const std::string &secUserId, long long maxCursor
             v.desc = aw.value("desc", "");
             auto video = aw.value("video", json::object());
             v.duration = video.value("duration", 0);
-            auto play = video.value("play_addr", json::object())
-                            .value("url_list", json::array());
+            auto play = video.value("play_addr", json::object()).value("url_list", json::array());
             if (!play.empty())
                 v.playUrl = play[0].get<std::string>();
-            auto cover = video.value("cover", json::object())
-                             .value("url_list", json::array());
+            auto cover = video.value("cover", json::object()).value("url_list", json::array());
             if (!cover.empty())
                 v.coverUrl = cover[0].get<std::string>();
             out.videos.push_back(std::move(v));
@@ -613,13 +610,12 @@ void DouyinApi::fetchUserLikes(const std::string &secUserId, long long maxCursor
 void DouyinApi::fetchUserMix(const std::string &mixId, long long cursor, int count,
                              std::function<void(const UserVideoResult &)> cb) {
     UserVideoResult out;
-    std::string params =
-        "device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id=" + mixId +
-        "&cursor=" + std::to_string(cursor) + "&count=" + std::to_string(count) +
-        "&cookie_enabled=true&screen_width=1920&screen_height=1080"
-        "&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome"
-        "&browser_version=150.0.0.0&browser_online=true&engine_name=Blink"
-        "&engine_version=150.0.0.0&os_name=Windows&os_version=10";
+    std::string params = "device_platform=webapp&aid=6383&channel=channel_pc_web&mix_id=" + mixId +
+                         "&cursor=" + std::to_string(cursor) + "&count=" + std::to_string(count) +
+                         "&cookie_enabled=true&screen_width=1920&screen_height=1080"
+                         "&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome"
+                         "&browser_version=150.0.0.0&browser_online=true&engine_name=Blink"
+                         "&engine_version=150.0.0.0&os_name=Windows&os_version=10";
     std::string body = signedGet("/aweme/v1/web/mix/aweme/", params, out.err);
     if (body.empty()) {
         if (out.err.empty())
@@ -642,12 +638,10 @@ void DouyinApi::fetchUserMix(const std::string &mixId, long long cursor, int cou
             v.desc = aw.value("desc", "");
             auto video = aw.value("video", json::object());
             v.duration = video.value("duration", 0);
-            auto play = video.value("play_addr", json::object())
-                            .value("url_list", json::array());
+            auto play = video.value("play_addr", json::object()).value("url_list", json::array());
             if (!play.empty())
                 v.playUrl = play[0].get<std::string>();
-            auto cover = video.value("cover", json::object())
-                             .value("url_list", json::array());
+            auto cover = video.value("cover", json::object()).value("url_list", json::array());
             if (!cover.empty())
                 v.coverUrl = cover[0].get<std::string>();
             out.videos.push_back(std::move(v));
@@ -759,13 +753,12 @@ DouyinApi::LoginResult DouyinApi::poll_qrcode(const std::string &token) {
     LoginResult r;
     std::string jar = IniConfig::instance().get_tiktok_douyin_cookies_file();
     std::string err;
-    std::string url =
-        "https://sso.douyin.com/check_qrconnect/?aid=6383&token=" + token +
-        "&service=https%3A%2F%2Fwww.douyin.com&device_platform=webapp"
-        "&cookie_enabled=true&browser_language=zh-CN&browser_platform=Win32"
-        "&browser_name=Chrome&browser_version=150.0.0.0&browser_online=true"
-        "&engine_name=Blink&engine_version=150.0.0.0&os_name=Windows&os_version=10"
-        "&platform=PC&screen_width=1920&screen_height=1080";
+    std::string url = "https://sso.douyin.com/check_qrconnect/?aid=6383&token=" + token +
+                      "&service=https%3A%2F%2Fwww.douyin.com&device_platform=webapp"
+                      "&cookie_enabled=true&browser_language=zh-CN&browser_platform=Win32"
+                      "&browser_name=Chrome&browser_version=150.0.0.0&browser_online=true"
+                      "&engine_name=Blink&engine_version=150.0.0.0&os_name=Windows&os_version=10"
+                      "&platform=PC&screen_width=1920&screen_height=1080";
     std::string body = douyin_login_get(url, jar, kDouyinUA, err);
     if (body.empty()) {
         r.err = err.empty() ? "empty response" : err;
