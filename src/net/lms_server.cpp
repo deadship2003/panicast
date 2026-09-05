@@ -17,6 +17,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <unistd.h>
 
@@ -351,7 +352,15 @@ void LmsServer::client_loop(Conn *c) {
             std::string body = pending.substr(hdr_end + 4, cl);
             pending.erase(0, total);
 
-            std::string resp = handle_http(*c, method, path, headers, body);
+            std::string resp;
+            bool held = false;
+            resp = handle_http(*c, method, path, headers, body, held);
+            if (held) {
+                // N10.4: this connection is now a held event stream — pump it until the
+                //   client goes away, then fall through to the normal teardown.
+                listen_loop(c);
+                break;
+            }
             {
                 std::lock_guard<std::mutex> lk(c->wmtx);
                 if (c->fd >= 0)
@@ -369,12 +378,21 @@ void LmsServer::client_loop(Conn *c) {
     c->done.store(true);
 }
 
-// ── HTTP/cometd (Bayeux JSON-RPC) — Squeezer's transport ───────────────────────
+// ── HTTP/cometd (Bayeux JSON-RPC) — the remote apps' transport ──────────────────
 //   POST /cometd with a JSON array of Bayeux messages; /meta/* keep the long-poll
 //   session alive, /service/* carry JSON-RPC "slim.request" calls whose params are
 //   LMS command arrays. Auth = HTTP Basic against lms_user/lms_pass.
+//
+//   N10.4 held streams: Squeeze Client's cometd layer is NOT a long-poll client — it
+//   sends connectionType "streaming" and reads the /meta/connect response body as a
+//   NEVER-ENDING event stream (readFromEventStream treats EOF as "connection failed"
+//   and restarts the whole session). For those connects we answer with a chunked
+//   response that stays open, ack the batch, and pump events from listen_loop().
+//   One-shot publish replies are ALSO queued onto the stream (master Squeeze Client
+//   waits for them there, not on the POST body).
 std::string LmsServer::handle_http(Conn &c, const std::string &method, const std::string &path,
-                                   const std::string &headers, const std::string &body) {
+                                   const std::string &headers, const std::string &body,
+                                   bool &held) {
     auto http_resp = [](int code, const char *status, const std::string &b,
                         const char *extra = "") {
         return fmt::format("HTTP/1.1 {} {}\r\nContent-Type: application/json;charset=UTF-8\r\n"
@@ -432,6 +450,72 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
             msgs = nlohmann::json::array({msgs});
         else if (!msgs.is_array())
             msgs = nlohmann::json::array();
+
+        // N10.4: Squeeze Client's streaming connect → HELD event stream (see the
+        //   transport comment above). The batch is [connect] (release builds) or
+        //   [connect, subscribe] (master bundles both) — ack every meta message in it
+        //   as the first chunk, register the listener, and let listen_loop() own the
+        //   connection from here.
+        bool streaming_connect = false;
+        for (const auto &m : msgs)
+            if (m.value("channel", std::string()).rfind("/meta/connect", 0) == 0 &&
+                m.value("connectionType", std::string()) == "streaming")
+                streaming_connect = true;
+        if (streaming_connect) {
+            nlohmann::json acks = nlohmann::json::array();
+            std::string cid;
+            for (const auto &m : msgs) {
+                std::string ch = m.value("channel", std::string());
+                nlohmann::json id = m.contains("id") ? m["id"] : nlohmann::json(nullptr);
+                cid = m.value("clientId", cid);
+                if (ch.rfind("/meta/connect", 0) == 0) {
+                    char ts[32];
+                    std::time_t now = std::time(nullptr);
+                    std::strftime(ts, sizeof(ts), "%FT%TZ", std::gmtime(&now));
+                    nlohmann::json j;
+                    j["channel"] = "/meta/connect";
+                    j["successful"] = true;
+                    j["clientId"] = m.value("clientId", std::string());
+                    j["timestamp"] = ts;
+                    nlohmann::json adv;
+                    adv["reconnect"] = "retry";
+                    adv["interval"] = 800;
+                    adv["timeout"] = 25000;
+                    j["advice"] = adv;
+                    j["id"] = id;
+                    acks.push_back(j);
+                } else if (ch.rfind("/meta/subscribe", 0) == 0) {
+                    nlohmann::json j;
+                    j["channel"] = ch;
+                    j["successful"] = true;
+                    j["clientId"] = m.value("clientId", std::string());
+                    j["subscription"] = m.value("subscription", std::string());
+                    j["id"] = id;
+                    acks.push_back(j);
+                }
+            }
+            std::string head = "HTTP/1.1 200 OK\r\nContent-Type: application/json;charset=UTF-8\r\n"
+                               "Transfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n";
+            {
+                std::lock_guard<std::mutex> lk(c.wmtx);
+                if (c.fd >= 0)
+                    ::send(c.fd, head.data(), head.size(), MSG_NOSIGNAL);
+            }
+            // Bounded send timeout — a stalled phone must not wedge the pump.
+            timeval tv{10, 0};
+            ::setsockopt(c.fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+            c.listener = true;
+            c.bayeux_cid = cid;
+            {
+                std::lock_guard<std::mutex> lk(listeners_mtx_);
+                listeners_[cid] = &c; // re-handshake: the newest stream replaces
+            }
+            write_chunk(c, acks.dump());
+            LOG(fmt::format("[LMS] client {} → held event stream (bayeux {})", c.client_id, cid));
+            held = true;
+            return "";
+        }
+
         for (const auto &m : msgs) {
             std::string ch = m.value("channel", std::string());
             nlohmann::json id = m.contains("id") ? m["id"] : nlohmann::json(nullptr);
@@ -488,7 +572,7 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
                     if (it == last_push_by_cid_.end() || it->second != st) {
                         nlohmann::json push;
                         push["channel"] =
-                            fmt::format("{}/slim/playerstatus/{}", m_cid, player_id());
+                            fmt::format("/{}/slim/playerstatus/{}", m_cid, player_id());
                         push["data"] = status_data();
                         push["id"] = nullptr;
                         out.push_back(push);
@@ -565,6 +649,12 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
                     msg["data"] = data;
                     msg["id"] = id;
                     out.push_back(msg);
+                    // N10.4: master Squeeze Client waits for one-shot replies ON THE
+                    //   EVENT STREAM, not on the POST body — queue it for the
+                    //   clientId's held listener (release builds read the POST body;
+                    //   they ignore the duplicate stream copy).
+                    if (!m_cid.empty())
+                        stream_deliver(m_cid, msg);
                 }
             }
         }
@@ -576,6 +666,89 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
     std::string dump = out.dump();
     LOG(fmt::format("[LMS-HTTP] << {}", dump.substr(0, 300)));
     return http_resp(200, "OK", dump);
+}
+
+// ── N10.4: held event-stream plumbing ───────────────────────────────────────────
+
+bool LmsServer::write_chunk(Conn &c, const std::string &payload) {
+    if (c.fd < 0)
+        return false;
+    // ONE JSON array per chunk, always: the client's incremental parser accumulates
+    //   raw bytes and re-parses the whole buffer at every "}]" — two concatenated
+    //   arrays in a single read are invalid JSON and wedge that parser forever.
+    std::string chunk = fmt::format("{:x}\r\n{}\r\n", payload.size(), payload);
+    std::lock_guard<std::mutex> lk(c.wmtx);
+    if (c.fd < 0)
+        return false;
+    return ::send(c.fd, chunk.data(), chunk.size(), MSG_NOSIGNAL) == (ssize_t)chunk.size();
+}
+
+void LmsServer::stream_deliver(const std::string &cid, const nlohmann::json &msg) {
+    std::lock_guard<std::mutex> lk(listeners_mtx_);
+    auto it = listeners_.find(cid);
+    if (it == listeners_.end() || !it->second->listener)
+        return;
+    Conn *c = it->second;
+    std::lock_guard<std::mutex> qk(c->queue_mtx);
+    c->outq.push_back(msg);
+}
+
+void LmsServer::listen_loop(Conn *c) {
+    std::string last_push;
+    auto last_write = std::chrono::steady_clock::now();
+    while (running_.load()) {
+        // Socket liveness: the client closes the stream (or, unexpectedly, sends —
+        //   the listen connection carries no further requests; drop any bytes).
+        struct pollfd p{c->fd, POLLIN, 0};
+        int pr = ::poll(&p, 1, 250);
+        if (pr > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR))) {
+            char tmp[512];
+            ssize_t n = ::recv(c->fd, tmp, sizeof(tmp), MSG_DONTWAIT);
+            if (n <= 0)
+                break; // stream closed by the client
+        }
+        if (!running_.load())
+            break;
+        // Queued one-shot replies (+ anything else routed here) → one array chunk.
+        nlohmann::json batch = nlohmann::json::array();
+        {
+            std::lock_guard<std::mutex> qk(c->queue_mtx);
+            for (auto &m : c->outq)
+                batch.push_back(std::move(m));
+            c->outq.clear();
+        }
+        // playerstatus push on change; unconditional re-push every 20s doubles as the
+        //   read-timeout heartbeat (the client's OkHttp read timeout is subscription
+        //   interval + 5s ≈ 65s; a silent stream is a dead stream to it).
+        auto now = std::chrono::steady_clock::now();
+        bool heartbeat =
+            std::chrono::duration_cast<std::chrono::seconds>(now - last_write).count() >= 20;
+        if (any_subscribed_.load() && running_.load()) {
+            nlohmann::json d = status_data();
+            std::string st = d.dump();
+            if (st != last_push || heartbeat) {
+                nlohmann::json push;
+                push["channel"] =
+                    fmt::format("/{}/slim/playerstatus/{}", c->bayeux_cid, player_id());
+                push["data"] = std::move(d);
+                push["id"] = nullptr;
+                batch.push_back(std::move(push));
+                last_push = std::move(st);
+            }
+        }
+        if (!batch.empty()) {
+            if (!write_chunk(*c, batch.dump()))
+                break;
+            last_write = std::chrono::steady_clock::now();
+        }
+    }
+    LOG(fmt::format("[LMS] client {} event stream ended", c->client_id));
+    {
+        std::lock_guard<std::mutex> lk(listeners_mtx_);
+        auto it = listeners_.find(c->bayeux_cid);
+        if (it != listeners_.end() && it->second == c)
+            listeners_.erase(it);
+    }
 }
 
 // Shared status builder: the object returned for slim "status" requests AND pushed on
@@ -1004,11 +1177,13 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         if (control_) {
             std::string before_sig = control_->snapshot_state().browse_sig;
             bool wait_change = false;
+            int wait_budget = 100; // 50ms units: 5s for async branch loads
             if (where == "back") {
                 push("nav_back");
                 wait_change = true; // the pop is in-memory; the next frame's flatten
                                     //   reflects it — without waiting we'd reply with
                                     //   the PRE-back list
+                wait_budget = 20;   // 1s: a back settles within a couple of frames
             } else if (where != "root") {
                 int idx = std::atoi(where.c_str());
                 auto before = control_->snapshot_state();
@@ -1023,7 +1198,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 //   (300ms stillness) or the ~5s budget runs out.
                 std::string prev = before_sig;
                 int still = 0;
-                for (int i = 0; i < 100 && running_.load(); ++i) {
+                for (int i = 0; i < wait_budget && running_.load(); ++i) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(50));
                     std::string cur = control_->snapshot_state().browse_sig;
                     if (cur != before_sig) {

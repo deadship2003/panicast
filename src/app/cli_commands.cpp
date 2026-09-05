@@ -124,6 +124,14 @@ int cmd_start() {
         printf("Exit the TUI first — it restarts the service automatically.\n");
         return 1;
     }
+    // N10.4: refuse to start into a port conflict — an orphan/older session holding
+    //   :9090 with no pidfile would otherwise yield a "running" but unreachable daemon.
+    if (lms_port_in_use()) {
+        printf("panicast daemon: the mini-LMS port is already in use by another "
+               "process —\nlikely an older panicast session without a pid file. Exit it "
+               "first (see `panicast status`).\n");
+        return 1;
+    }
     return systemctl("start", false);
 }
 

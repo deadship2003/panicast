@@ -271,6 +271,79 @@ def main():
     check("repeat/shuffle reported as strings",
           isinstance(st2.get("playlist repeat"), str) and isinstance(st2.get("playlist shuffle"), str))
 
+
+    print("== N10.4: held streaming listen (Squeeze Client event stream) ==")
+    import time as _time
+
+    def read_chunks(sock, seconds):
+        sock.settimeout(0.4)
+        buf = b""; chunks = []; end = _time.time() + seconds
+        while _time.time() < end:
+            try:
+                d = sock.recv(65536)
+                if not d: break
+                buf += d
+            except socket.timeout:
+                continue
+            while True:
+                if b"\r\n" not in buf: break
+                szline, rem = buf.split(b"\r\n", 1)
+                try: sz = int(szline, 16)
+                except ValueError: break
+                if len(rem) < sz + 2: break
+                if sz > 0: chunks.append(rem[:sz])
+                buf = rem[sz + 2:]
+        return chunks
+
+    s = socket.create_connection((HOST, PORT), timeout=5)
+    def post_raw(sock, body_str):
+        sock.sendall(("POST /cometd HTTP/1.1\r\nHost: %s\r\nAuthorization: Basic %s\r\n"
+                      "Content-Type: application/json\r\nContent-Length: %d\r\n"
+                      "Connection: keep-alive\r\n\r\n%s"
+                      % (HOST, AUTH, len(body_str), body_str)).encode())
+    hs_body = json.dumps([{"channel": "/meta/handshake", "version": "1.0",
+                           "supportedConnectionTypes": ["streaming"], "id": "1"}])
+    post_raw(s, hs_body)
+    buf = b""
+    while b"\r\n\r\n" not in buf: buf += s.recv(65536)
+    head, rest = buf.split(b"\r\n\r\n", 1)
+    clen = next(int(l.split(b":", 1)[1]) for l in head.split(b"\r\n") if l.lower().startswith(b"content-length:"))
+    while len(rest) < clen: rest += s.recv(65536)
+    scid = json.loads(rest[:clen])[0]["clientId"]
+    check("stream phase: handshake ok", bool(scid))
+
+    lst = socket.create_connection((HOST, PORT), timeout=5)
+    post_raw(lst, json.dumps([{"channel": "/meta/connect", "id": "8",
+                               "connectionType": "streaming", "clientId": scid}]))
+    buf = b""
+    while b"\r\n\r\n" not in buf: buf += lst.recv(65536)
+    s_head, rest = buf.split(b"\r\n\r\n", 1)
+    check("streaming connect → chunked (held) response",
+          b"chunked" in s_head.lower() and b"content-length" not in s_head.lower(),
+          s_head.decode()[:100])
+    lst.settimeout(3)
+    while b"\r\n" not in rest: rest += lst.recv(65536)
+    szline, rem = rest.split(b"\r\n", 1)
+    sz = int(szline, 16)
+    while len(rem) < sz + 2: rem += lst.recv(65536)
+    first = json.loads(rem[:sz])
+    check("stream first chunk = connect ack",
+          first[0]["channel"] == "/meta/connect" and first[0].get("successful") is True)
+
+    # one-shot from the OTHER socket; reply must ALSO arrive on the stream
+    post_raw(s, json.dumps([{"channel": "/slim/request", "clientId": scid, "id": "20",
+                             "data": {"response": f"/{scid}/slim/request/1",
+                                      "request": [PLAYER, ["status", "-", "1"]]}}]))
+    got = read_chunks(lst, 4)
+    chans = [m["channel"] for c in got for m in json.loads(c)]
+    check("one-shot reply routed onto the stream", f"/{scid}/slim/request/1" in chans, str(chans))
+    check("playerstatus push on stream, channel has leading slash",
+          any(c.startswith(f"/{scid}/slim/playerstatus/") for c in chans), str(chans))
+    # each chunk is exactly ONE JSON array (two arrays in one read break the app parser)
+    ok_arrays = all(isinstance(json.loads(c), list) for c in got)
+    check("every stream chunk is one JSON array", ok_arrays)
+    lst.close(); s.close()
+
     print(f"\n{passed} passed, {failed} failed")
 
     sys.exit(1 if failed else 0)

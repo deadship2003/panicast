@@ -97,12 +97,33 @@ private:
         std::atomic<bool> done{false};   // set by client_loop right before returning
         std::atomic<bool> authed{false}; // Basic credentials verified (cached per conn)
         std::string http_auth_user;      // verified user (logging)
+        // N10.4: held streaming listener (Squeeze Client's /meta/connect event stream —
+        //   it reads the response body as a NEVER-ENDING stream; a complete response
+        //   is EOF → "connection failed" → reconnect loop). The reader thread becomes
+        //   the single writer: everything the client must see on the stream goes
+        //   through outq and is drained as ONE JSON array per chunk (two arrays in a
+        //   single client read break its incremental parser permanently).
+        bool listener = false;
+        std::string bayeux_cid;           // Bayeux clientId it listens as
+        std::mutex queue_mtx;             // guards outq
+        std::vector<nlohmann::json> outq; // pending stream messages
     };
 
     void accept_loop();
     void client_loop(Conn *c); // read HTTP requests → handle_http → write response
     std::string handle_http(Conn &c, const std::string &method, const std::string &path,
-                            const std::string &headers, const std::string &body);
+                            const std::string &headers, const std::string &body, bool &held);
+    // N10.4: pump for a held /meta/connect stream — runs on the conn's reader thread
+    //   until the client goes away. Drains outq (one array chunk), pushes playerstatus
+    //   on change, re-pushes every 20s as a read-timeout heartbeat (the client's
+    //   OkHttp read timeout is subscription-interval + 5s ≈ 65s).
+    void listen_loop(Conn *c);
+    // Chunked-transfer write of one JSON array; false → connection is gone.
+    bool write_chunk(Conn &c, const std::string &payload);
+    // Queue a message for <cid>'s held stream (one-shot publish replies are delivered
+    //   BOTH on their POST body and on the stream — master Squeeze Client only reads
+    //   the stream). No-op when that clientId has no live listener.
+    void stream_deliver(const std::string &cid, const nlohmann::json &msg);
     nlohmann::json json_slim_request(Conn &c, const std::vector<std::string> &cmd);
     // Shared status builder. start < 0 → "current song" shape (item_loop[0] = playing track,
     //   what parsePlayerStatus builds the CurrentPlaylistItem from; also the push payload).
@@ -133,11 +154,15 @@ private:
     // Push-state (server-global, NOT per-Conn: the app spreads requests over several
     //   sockets, so subscription state and last-push bookkeeping must survive across
     //   connections — keyed by Bayeux clientId).
-    std::atomic<bool> any_subscribed_{false};             // any status interest seen
-    std::atomic<bool> muted_{false};                      // `mixer muting` state (LMS
-                                                          //   encodes mute as a NEGATIVE
-                                                          //   mixer volume; mpv holds the
-                                                          //   real audio state)
+    std::atomic<bool> any_subscribed_{false}; // any status interest seen
+    std::atomic<bool> muted_{false};          // `mixer muting` state (LMS
+                                              //   encodes mute as a NEGATIVE
+                                              //   mixer volume; mpv holds the
+                                              //   real audio state)
+
+    // N10.4: Bayeux clientId → held listen connection. Guarded by listeners_mtx_.
+    std::mutex listeners_mtx_;
+    std::map<std::string, Conn *> listeners_;
     std::mutex push_mtx_;                                 // guards last_push_by_cid_
     std::map<std::string, std::string> last_push_by_cid_; // cid → last pushed dump
 

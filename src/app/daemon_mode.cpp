@@ -16,7 +16,13 @@
 #include <signal.h>
 #include <unistd.h>
 
+#include <fmt/format.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+
 #include "panicast/app/app.h"
+#include "panicast/config/ini_config.h"
+#include "panicast/core/logger.h"
 #include "panicast/core/paths.h"
 #include "panicast/parsers/xml_helpers.h"
 #include "panicast/ui/ui.h" // setup_signal_handlers / tui_cleanup (curses-guarded no-op here)
@@ -67,6 +73,31 @@ void remove_tui_pidfile() {
     std::remove(tui_pidfile_path().c_str());
 }
 
+// Probe-bind with the SAME semantics LmsServer's listener uses (dual-stack any +
+//   SO_REUSEADDR): fails exactly when an ACTIVE listener holds the port — TIME_WAIT
+//   leftovers of a just-exited daemon do NOT trip it (important for systemd restart).
+bool lms_port_in_use() {
+    IniConfig::instance().load();
+    if (!IniConfig::instance().get_remote_lms_enabled())
+        return false; // no LMS → nothing to guard
+    int port = IniConfig::instance().get_remote_lms_port();
+    int fd = ::socket(AF_INET6, SOCK_STREAM, 0);
+    if (fd < 0)
+        return false;
+    int v6only = 0, yes = 1;
+    ::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in6 a6{};
+    a6.sin6_family = AF_INET6;
+    a6.sin6_port = htons((uint16_t)port);
+    a6.sin6_addr = in6addr_any;
+    bool busy = ::bind(fd, reinterpret_cast<struct sockaddr *>(&a6), sizeof(a6)) != 0;
+    ::close(fd);
+    if (busy)
+        LOG(fmt::format("[DAEMON] pre-flight: mini-LMS port {} is already in use", port));
+    return busy;
+}
+
 namespace
 {
 void write_pidfile() {
@@ -102,6 +133,17 @@ int run_daemon() {
         std::fprintf(stderr, "panicast --daemon: a TUI session owns playback right now — exit it "
                              "first.\n(It restarts the background service automatically when it "
                              "exits.)\n");
+        return 1;
+    }
+    // N10.4: an orphan/older-binary session can hold the mini-LMS port with NO pidfile
+    //   (e.g. a TUI from before the pidfile existed). Starting beside it produced a
+    //   ZOMBIE daemon — everything up except the very thing the phone connects to.
+    //   Fail loudly instead; systemd's restart then self-heals once the port frees.
+    if (lms_port_in_use()) {
+        std::fprintf(stderr,
+                     "panicast --daemon: the mini-LMS port is already in use by "
+                     "another process — likely an older panicast session without a pid file.\n"
+                     "Exit it (check `panicast status` / running terminals) and try again.\n");
         return 1;
     }
 
