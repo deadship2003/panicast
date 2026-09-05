@@ -186,6 +186,8 @@ def main():
     check("menu item id+node strings",
           all(isinstance(i.get("id"), str) and isinstance(i.get("node"), str) for i in items),
           str(items)[:120])
+    check("menu items carry node='home' (2.4 home-screen filter)",
+          all(i.get("node") == "home" for i in items), str(items)[:120])
     if items:
         check("menu go action cmd", "go" in items[0].get("actions", {}))
 

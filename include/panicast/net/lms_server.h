@@ -125,6 +125,11 @@ private:
     //   the stream). No-op when that clientId has no live listener.
     void stream_deliver(const std::string &cid, const nlohmann::json &msg);
     nlohmann::json json_slim_request(Conn &c, const std::vector<std::string> &cmd);
+    // players/serverstatus payload (players_loop + prefs echo for requested keys).
+    //   Shared by the command handler and the listen pump's periodic serverstatus
+    //   push (Squeeze Client subscribes "serverstatus subscribe:60" and drops the
+    //   connection when nothing arrives — cmd = {} omits the prefs echo).
+    nlohmann::json serverstatus_data(const std::vector<std::string> &cmd);
     // Shared status builder. start < 0 → "current song" shape (item_loop[0] = playing track,
     //   what parsePlayerStatus builds the CurrentPlaylistItem from; also the push payload).
     //   start >= 0 → "playlist page" shape (Squeezer's CurrentPlaylistActivity orders

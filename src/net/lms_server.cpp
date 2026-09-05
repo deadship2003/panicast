@@ -723,6 +723,17 @@ void LmsServer::listen_loop(Conn *c) {
         auto now = std::chrono::steady_clock::now();
         bool heartbeat =
             std::chrono::duration_cast<std::chrono::seconds>(now - last_write).count() >= 20;
+        // serverstatus subscription feed (Squeeze Client subscribes
+        //   "serverstatus subscribe:60" and treats a silent channel as a dead
+        //   connection — observed as a full reconnect ~70s in). Real LMS pushes this
+        //   per subscription interval; every 20s heartbeat slot is well within it.
+        if (heartbeat && running_.load()) {
+            nlohmann::json push;
+            push["channel"] = fmt::format("/{}/slim/serverstatus", c->bayeux_cid);
+            push["data"] = serverstatus_data({});
+            push["id"] = nullptr;
+            batch.push_back(std::move(push));
+        }
         if (any_subscribed_.load() && running_.load()) {
             nlohmann::json d = status_data();
             std::string st = d.dump();
@@ -894,6 +905,74 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     r["playlist_loop"] = loop;
     return r;
 }
+// players/serverstatus payload (players_loop + prefs echo for requested keys). Shared
+//   by the command handler and the listen pump's periodic serverstatus push (Squeeze
+//   Client subscribes "serverstatus subscribe:60" and drops the connection when
+//   nothing arrives on that channel — cmd = {} omits the prefs echo).
+nlohmann::json LmsServer::serverstatus_data(const std::vector<std::string> &cmd) {
+    nlohmann::json p;
+    p["playerindex"] = "0";
+    p["playerid"] = player_id();
+    p["name"] = player_name();
+    p["model"] = "squeezelite";
+    p["modelname"] = "SqueezeLite";
+    p["isplayer"] = "1";
+    p["connected"] = "1";
+    p["power"] = "1";
+    p["displaytype"] = "graphic-280x16";
+    p["seq_no"] = "0";
+    nlohmann::json r;
+    r["count"] = "1";
+    r["player_count"] = "1";
+    r["version"] = "8.4.0";
+    r["sn"] = "0";
+    // Squeezer names the prefs it wants ("prefs:k1,k2..." / "playerprefs:k1,k2...") and
+    //   stalls initializing until they come back (observed: it re-sends serverstatus
+    //   forever when they're absent). Echo sensible defaults for every requested key.
+    auto add_prefs = [&](const std::string &prefix, nlohmann::json &target) {
+        static const std::map<std::string, nlohmann::json> defaults = {
+            {"mediadirs", nlohmann::json::array()}, // ARRAY — a String "" crashes the
+                                                    // app's (Object[]) cast in Util
+            {"defeatDestructiveTouchToPlay", "0"},
+            {"defeatDestru", "0"}, // truncated form seen on the wire
+            {"digitalVolumeControl", "1"},
+            {"alarmDefaultVolume", "40"},
+            {"alarmfadeseconds", "0"},
+            {"alarmSnoozeSeconds", "600"},
+            {"alarmTimeoutSeconds", "3600"},
+            {"alarmsEnabled", "0"},
+            {"playtrackalbum", "0"},
+            {"syncVolume", "1"},
+            {"syncPower", "1"},
+        };
+        for (const auto &a : cmd) {
+            if (a.rfind(prefix, 0) != 0)
+                continue;
+            std::string list = a.substr(prefix.size());
+            std::string cur;
+            auto emit_key = [&](const std::string &key) {
+                auto it = defaults.find(key);
+                target[key] = it != defaults.end() ? it->second : nlohmann::json("0");
+            };
+            for (char c : list) {
+                if (c == ',') {
+                    emit_key(cur);
+                    cur.clear();
+                } else {
+                    cur += c;
+                }
+            }
+            emit_key(cur);
+        }
+    };
+    add_prefs("prefs:", r);
+    add_prefs("playerprefs:", p); // FLAT in the player record — Player.java reads
+                                  // record.get(prefName), not a nested object
+    p["ip"] = "127.0.0.1";        // Player.java reads it (cosmetic, but it parses it)
+    r["players_loop"] = nlohmann::json::array({p}); // AFTER all p mutations (copies!)
+    return r;
+}
+
 // JSON-RPC command mapping — LMS-JSON shaped: stringly-typed values, players_loop array
 //   for player listings, flat status object. The surface mirrors what Squeezer actually
 //   sends (verified against its source: SqueezeService.java builds these cmd arrays).
@@ -925,67 +1004,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
     auto int_arg = [&](size_t i) -> int { return i < cmd.size() ? std::atoi(cmd[i].c_str()) : 0; };
 
     if (k == "players" || k == "serverstatus") {
-        nlohmann::json p;
-        p["playerindex"] = "0";
-        p["playerid"] = player_id();
-        p["name"] = player_name();
-        p["model"] = "squeezelite";
-        p["modelname"] = "SqueezeLite";
-        p["isplayer"] = "1";
-        p["connected"] = "1";
-        p["power"] = "1";
-        p["displaytype"] = "graphic-280x16";
-        p["seq_no"] = "0";
-        nlohmann::json r;
-        r["count"] = "1";
-        r["player_count"] = "1";
-        r["version"] = "8.4.0";
-        r["sn"] = "0";
-        // Squeezer names the prefs it wants ("prefs:k1,k2..." / "playerprefs:k1,k2...") and
-        //   stalls initializing until they come back (observed: it re-sends serverstatus
-        //   forever when they're absent). Echo sensible defaults for every requested key.
-        auto add_prefs = [&](const std::string &prefix, nlohmann::json &target) {
-            static const std::map<std::string, nlohmann::json> defaults = {
-                {"mediadirs", nlohmann::json::array()}, // ARRAY — a String "" crashes the
-                                                        // app's (Object[]) cast in Util
-                {"defeatDestructiveTouchToPlay", "0"},
-                {"defeatDestru", "0"}, // truncated form seen on the wire
-                {"digitalVolumeControl", "1"},
-                {"alarmDefaultVolume", "40"},
-                {"alarmfadeseconds", "0"},
-                {"alarmSnoozeSeconds", "600"},
-                {"alarmTimeoutSeconds", "3600"},
-                {"alarmsEnabled", "0"},
-                {"playtrackalbum", "0"},
-                {"syncVolume", "1"},
-                {"syncPower", "1"},
-            };
-            for (const auto &a : cmd) {
-                if (a.rfind(prefix, 0) != 0)
-                    continue;
-                std::string list = a.substr(prefix.size());
-                std::string cur;
-                auto emit_key = [&](const std::string &key) {
-                    auto it = defaults.find(key);
-                    target[key] = it != defaults.end() ? it->second : nlohmann::json("0");
-                };
-                for (char c : list) {
-                    if (c == ',') {
-                        emit_key(cur);
-                        cur.clear();
-                    } else {
-                        cur += c;
-                    }
-                }
-                emit_key(cur);
-            }
-        };
-        add_prefs("prefs:", r);
-        add_prefs("playerprefs:", p); // FLAT in the player record — Player.java reads
-                                      // record.get(prefName), not a nested object
-        p["ip"] = "127.0.0.1";        // Player.java reads it (cosmetic, but it parses it)
-        r["players_loop"] = nlohmann::json::array({p}); // AFTER all p mutations (copies!)
-        return r;
+        return serverstatus_data(cmd);
     }
     if (k == "status") {
         any_subscribed_.store(true); // any status interest enables connect-time pushes
@@ -1265,7 +1284,9 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             go["cmd"] = nlohmann::json::array({"panicast", "browse", "root"});
             nlohmann::json item;
             item["id"] = "library";
-            item["node"] = "library";
+            // node MUST be "home": release builds (2.4) render the home screen by
+            //   filtering menu items on node == "home" — anything else never shows.
+            item["node"] = "home";
             item["text"] = "panicast · " + mode_name;
             item["weight"] = 1;
             item["actions"] = nlohmann::json({{"go", go}});
@@ -1276,7 +1297,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             go["cmd"] = nlohmann::json::array({"status"});
             nlohmann::json item;
             item["id"] = "currentplaylist";
-            item["node"] = "currentplaylist";
+            item["node"] = "home";
             item["text"] = "Current Playlist";
             item["weight"] = 2;
             item["actions"] = nlohmann::json({{"go", go}});
