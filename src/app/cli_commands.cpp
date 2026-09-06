@@ -416,28 +416,35 @@ void ensure_user_unit() {
     std::string exe = n > 0 ? std::string(self, (size_t)n) : "/usr/local/bin/panicast";
     std::string unit = std::string("# panicast user-space service (installed automatically by ") +
                        "the first run — N10.3).\n"
-                       "#   Manage with: panicast start|stop|restart|enable|disable (all "
-                       "sudo-free, systemctl --user).\n"
-                       "[Unit]\n"
-                       "Description=panicast headless media daemon (Squeeze Client remote)\n"
-                       "After=network.target\n"
-                       "\n"
-                       "[Service]\n"
-                       "Type=simple\n"
-                       "ExecStart=" +
-                       exe +
-                       " --daemon\n"
-                       "Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer\n"
-                       "WorkingDirectory=" +
-                       std::string(home ? home : "") +
-                       "\n"
-                       "Restart=on-failure\n"
-                       "RestartSec=3\n"
-                       "# The daemon's clean shutdown (mpv stop joins) takes ~2-3s.\n"
-                       "TimeoutStopSec=15\n"
-                       "\n"
-                       "[Install]\n"
-                       "WantedBy=default.target\n";
+                       // WSLg only: point pulse at the WSLg server (shells get this via
+                       //   /etc/profile.d, a user service does NOT). On a native host this
+                       //   env would OVERRIDE the working pipewire/pulse socket with a
+                       //   nonexistent path → mpv AO=null → silent playback (seen on Arch).
+                       + (::access("/mnt/wslg/PulseServer", F_OK) == 0
+                              ? "Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer\n"
+                              : "");
+    "#   Manage with: panicast start|stop|restart|enable|disable (all "
+    "sudo-free, systemctl --user).\n"
+    "[Unit]\n"
+    "Description=panicast headless media daemon (Squeeze Client remote)\n"
+    "After=network.target\n"
+    "\n"
+    "[Service]\n"
+    "Type=simple\n"
+    "ExecStart=" +
+        exe +
+        " --daemon\n"
+        "Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer\n"
+        "WorkingDirectory=" +
+        std::string(home ? home : "") +
+        "\n"
+        "Restart=on-failure\n"
+        "RestartSec=3\n"
+        "# The daemon's clean shutdown (mpv stop joins) takes ~2-3s.\n"
+        "TimeoutStopSec=15\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n";
     std::string path = dir + "/" + UNIT;
     std::string existing;
     {
