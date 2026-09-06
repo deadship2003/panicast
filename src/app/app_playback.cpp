@@ -36,6 +36,7 @@ int App::build_peer_list(TreeNodePtr node) {
         it.duration = node->duration;
         it.artist = node->artist; // META-1
         it.album = node->album;
+        it.art_url = node->art_url; // META-7i
         URLType ut = URLClassifier::classify(node->url);
         it.is_video = node->is_youtube || URLClassifier::is_video(ut);
         it.node = node;
@@ -53,6 +54,7 @@ int App::build_peer_list(TreeNodePtr node) {
             it.duration = sib->duration;
             it.artist = sib->artist; // META-1
             it.album = sib->album;
+            it.art_url = sib->art_url; // META-7i
             URLType ut = URLClassifier::classify(sib->url);
             it.is_video = sib->is_youtube || URLClassifier::is_video(ut);
             it.node = sib;
@@ -82,6 +84,7 @@ int App::build_peer_list(TreeNodePtr node) {
                     pi.duration = it->duration;
                     pi.artist = it->artist; // META-1
                     pi.album = it->album;
+                    pi.art_url = it->art_url; // META-7i
                     URLType ut = URLClassifier::classify(it->url);
                     pi.is_video = it->is_youtube || URLClassifier::is_video(ut);
                     pi.node = it;

@@ -194,8 +194,8 @@ void App::update_remote_state_cache() {
         std::lock_guard<std::mutex> lk(playback_.playlist_mutex());
         s.playlist.reserve(playback_.playlist().size());
         for (const auto &it : playback_.playlist()) {
-            s.playlist.push_back(
-                {it.title, it.duration, it.is_video, it.artist, it.album, it.art_url});
+            s.playlist.push_back({it.title, it.duration, it.is_video, it.artist, it.album,
+                              it.art_url});
         }
     }
 

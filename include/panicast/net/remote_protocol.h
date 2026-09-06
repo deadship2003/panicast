@@ -18,8 +18,9 @@ struct RemotePlaylistItem {
     std::string title;
     int duration = 0;
     bool is_video = false;
-    std::string artist; // META-1: real values when the tree carries them
-    std::string album;  // META-1
+    std::string artist;  // META-1: real values when the tree carries them
+    std::string album;   // META-1
+    std::string art_url; // META-7i: per-item artwork for playlist rows
 };
 
 // One row of the CURRENT mode's display list (the flat tree the TUI renders). Served to

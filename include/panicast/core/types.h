@@ -164,6 +164,7 @@ struct PlaylistItem {
     bool is_video = false;
     std::string artist;    // META-1: carried to the remote playlist rows
     std::string album;     // META-1
+    std::string art_url;   // META-7i: per-item artwork
     std::string node_path; // Node path (SoftLink reference)
     TreeNodePtr node;      // F35: source tree node (so playback_node can track it for INFO title)
 };

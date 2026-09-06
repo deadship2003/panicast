@@ -1150,6 +1150,10 @@ nlohmann::json LmsServer::status_data(int start, int window) {
             it["album"] = !s.playlist[i].album.empty() ? s.playlist[i].album
                                                        : (s.album.empty() ? "panicast" : s.album);
             it["duration"] = s.playlist[i].duration;
+            if (!s.playlist[i].art_url.empty())
+                it["icon"] = s.playlist[i].art_url;
+            else if (!s.art_url.empty())
+                it["icon"] = s.art_url; // fallback: current track's artwork
             nlohmann::json go;
             go["cmd"] = nlohmann::json::array({"playlist", "index", std::to_string(i)});
             it["actions"] = nlohmann::json({{"go", go}});
