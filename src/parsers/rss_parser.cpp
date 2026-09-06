@@ -65,6 +65,11 @@ TreeNodePtr RSSParser::parse(std::string xml, const std::string &feed_url) {
         }
     }
 
+    // Episodes without their own artwork inherit the feed cover — the remote browse
+    //   rows and the now-playing screen then show one consistent logo per podcast.
+    for (auto &e : channel->children)
+        if (e->art_url.empty())
+            e->art_url = channel->art_url;
     return channel; // doc is released automatically by XmlDocGuard
 }
 
@@ -102,13 +107,22 @@ void RSSParser::parse_channel(xmlNodePtr ch, TreeNodePtr c) {
                 xmlFree(t);
             }
         }
-        // iTunes extension - image (podcast cover)
+        // iTunes extension - image (podcast cover) → feed logo (remote browse artwork)
         else if (strcmp(local_name, "itunes:image") == 0) {
             xmlChar *href = xmlGetProp(p, (const xmlChar *)"href");
             if (href) {
-                // Could store the cover URL
+                c->art_url = (const char *)href;
                 xmlFree(href);
             }
+        }
+        // Atom-style logo inside a channel (some feeds embed it)
+        else if (strcmp(local_name, "image") == 0 || strcmp(local_name, "logo") == 0) {
+            xmlChar *href = xmlGetProp(p, (const xmlChar *)"href");
+            if (href && c->art_url.empty()) {
+                c->art_url = (const char *)href;
+            }
+            if (href)
+                xmlFree(href);
         }
         // iTunes extension - category
         else if (strcmp(local_name, "itunes:category") == 0) {
@@ -270,11 +284,13 @@ TreeNodePtr RSSParser::parse_item(xmlNodePtr it) {
         else if (strcmp(local_name, "author") == 0 || strcmp(local_name, "itunes:author") == 0) {
             // Could store author information; currently ignored
         }
-        // iTunes extension - image (cover image)
-        else if (strcmp(local_name, "itunes:image") == 0) {
+        // iTunes extension - image (episode artwork; often the feed cover). libxml
+        //   strips the namespace prefix from ->name for xmlns-declared elements, so
+        //   match the bare "image" too (href attribute in both spellings).
+        else if (strcmp(local_name, "itunes:image") == 0 || strcmp(local_name, "image") == 0) {
             xmlChar *href = xmlGetProp(i, (const xmlChar *)"href");
             if (href) {
-                // Could store the cover URL; currently ignored
+                ep->art_url = (const char *)href;
                 xmlFree(href);
             }
         }

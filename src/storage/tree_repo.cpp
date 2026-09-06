@@ -70,8 +70,9 @@ void DatabaseManager::save_tree_node_recursive(const TreeNodePtr &node,
     int cur_order = order++;
     const char *sql = "INSERT INTO tree_nodes (root_type, parent_id, title, url, type, expanded, "
                       "children_loaded, "
-                      "is_youtube, has_subtitle, channel_name, is_cached, sort_order) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+                      "is_youtube, has_subtitle, channel_name, is_cached, sort_order, art_url, "
+                      "subtext) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, root_type.c_str(), -1, SQLITE_TRANSIENT);
@@ -86,6 +87,8 @@ void DatabaseManager::save_tree_node_recursive(const TreeNodePtr &node,
         sqlite3_bind_text(stmt, 10, node->channel_name.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int(stmt, 11, node->is_cached ? 1 : 0);
         sqlite3_bind_int(stmt, 12, cur_order);
+        sqlite3_bind_text(stmt, 13, node->art_url.c_str(), -1, SQLITE_TRANSIENT); // ART-1
+        sqlite3_bind_text(stmt, 14, node->subtext.c_str(), -1, SQLITE_TRANSIENT); // ART-1
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
@@ -248,7 +251,7 @@ void DatabaseManager::load_tree_node_recursive(const TreeNodePtr &parent,
                                                const std::string &root_type, int parent_id) {
     // Parameterized (no string interpolation)
     const char *sql = "SELECT id, title, url, type, expanded, children_loaded, is_youtube, "
-                      "has_subtitle, channel_name, is_cached "
+                      "has_subtitle, channel_name, is_cached, art_url, subtext "
                       "FROM tree_nodes WHERE root_type=? AND parent_id=? ORDER BY sort_order;";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -271,6 +274,8 @@ void DatabaseManager::load_tree_node_recursive(const TreeNodePtr &parent,
         node->has_subtitle = sqlite3_column_int(stmt, 7) != 0; // Y23.10: feed-level 📜 flag
         node->channel_name = col(8);
         node->is_cached = sqlite3_column_int(stmt, 9) != 0;
+        node->art_url = col(10); // ART-1: remote artwork (station logo / podcast cover)
+        node->subtext = col(11); // ART-1: remote browse second line
         // F38 (#1): is_downloaded/local_file are NOT stored in tree_nodes (single source = media_cache).
         //   Left as default here; draw_line queries CacheManager::is_downloaded(url) live for coloring,
         //   so no information is lost. (Avoids a db-mtx → cache-mtx lock ordering inversion vs

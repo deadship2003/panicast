@@ -201,8 +201,12 @@ void App::update_remote_state_cache() {
                     break;
                 bool branch =
                     d.node->type == NodeType::FOLDER || d.node->type == NodeType::PODCAST_FEED;
-                cached_rows.push_back(
-                    {d.node->title, d.node->subtext, d.node->art_url, d.depth, branch});
+                // ART-1: rows without their own artwork inherit the nearest ancestor's
+                //   (episode → feed cover); DB-loaded and OPML trees carry parent links.
+                std::string art = d.node->art_url;
+                for (TreeNodePtr p = d.node->parent.lock(); art.empty() && p; p = p->parent.lock())
+                    art = p->art_url;
+                cached_rows.push_back({d.node->title, d.node->subtext, art, d.depth, branch});
                 ++n;
             }
         }

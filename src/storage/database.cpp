@@ -97,7 +97,10 @@ bool DatabaseManager::init() {
     //   CACHE-1: SCHEMA_VERSION 48 -> 49. Four per-mode list-cache tables so every mode persists its
     //     L/ENTER expanded content to SQLite (bilibili_follow_cache / bilibili_history_cache /
     //     iptv_cache / local_folder_cache). All CREATE TABLE IF NOT EXISTS — additive, user data kept.
-    constexpr int SCHEMA_VERSION = 49;
+    //   ART-1: SCHEMA_VERSION 49 -> 50. tree_nodes gains `art_url` + `subtext` columns so the
+    //     remote (Squeeze Client) browse rows and now-playing artwork survive a restart.
+    //     Idempotent ALTER TABLE ADD COLUMN below; tree data preserved.
+    constexpr int SCHEMA_VERSION = 50;
     int stored_version = 0;
     {
         sqlite3_stmt *sv = nullptr;
@@ -144,6 +147,8 @@ bool DatabaseManager::init() {
             channel_name TEXT,
             is_cached INTEGER DEFAULT 0,
             sort_order INTEGER DEFAULT 0,
+            art_url TEXT,     -- ART-1: remote browse / now-playing artwork (station logo, podcast cover)
+            subtext TEXT,     -- ART-1: second display line for the remote browse rows
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS progress (
@@ -440,6 +445,9 @@ bool DatabaseManager::init() {
     add_column_if_missing("episode_cache", "subtitle_url", "TEXT"); // Y23.10
     add_column_if_missing("episode_cache", "has_asr_srt", "INTEGER DEFAULT 0");
     add_column_if_missing("episode_cache", "asr_srt_path", "TEXT");
+    // ART-1 (49 -> 50): tree artwork + second-line text survive restarts.
+    add_column_if_missing("tree_nodes", "art_url", "TEXT");
+    add_column_if_missing("tree_nodes", "subtext", "TEXT");
     add_column_if_missing("favourites", "is_youtube", "INTEGER DEFAULT 0");
     add_column_if_missing("favourites", "channel_name", "TEXT");
     add_column_if_missing("favourites", "source_type", "TEXT");

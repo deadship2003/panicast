@@ -85,10 +85,12 @@ void OPMLParser::parse_outline(xmlNodePtr node, TreeNodePtr parent, bool is_top_
         std::string item = get_xml_prop_any(node, {"item"});
         std::string key = get_xml_prop_any(node, {"key"});
         std::string subtext = get_xml_prop_any(node, {"subtext"});
+        std::string image = get_xml_prop_any(node, {"image", "art"}); // station logo
         std::string duration_str = get_xml_prop_any(node, {"topic_duration"});
         std::string stream_type = get_xml_prop_any(node, {"stream_type"});
 
         child->subtext = subtext;
+        child->art_url = image; // remote browse / now-playing artwork
         if (!duration_str.empty()) {
             try {
                 child->duration = std::stoi(duration_str);
