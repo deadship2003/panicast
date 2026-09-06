@@ -4,7 +4,7 @@
 #include <string>
 #include <vector>
 #include <getopt.h>
-#include <unistd.h> // isatty: client/engine TUI routing
+#include <unistd.h>
 
 #include <curl/curl.h>
 #include <libxml/parser.h>
@@ -291,8 +291,8 @@ int main(int argc, char *argv[]) {
                       << (tty.empty() ? "" : ", terminal " + tty)
                       << ") — it owns mpv and the database, so a second one cannot start."
                       << std::endl;
-            std::cerr << "Exit it there (q), or run `panicast --client` for a second, "
-                         "read-only view."
+            std::cerr << "Exit it there (q), then run panicast again for a new "
+                         "session."
                       << std::endl;
             return 1;
         }
