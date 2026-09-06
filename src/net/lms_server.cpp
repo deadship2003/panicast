@@ -7,6 +7,7 @@
 #include "panicast/net/remote_command_bus.h"
 
 #include <fmt/format.h>
+#include <fmt/ranges.h> // fmt::join (separate header since fmt 8; Arch's fmt needs it)
 
 #include <algorithm>
 #include <chrono>
