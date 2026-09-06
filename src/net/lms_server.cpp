@@ -1579,6 +1579,41 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         r["offset"] = 0;
         r["item_loop"] = loop;
         return r;
+    } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "context") {
+        // META-7g: context menu → Squeeze Client's ContextMenuBottomSheetFragment
+        nlohmann::json r;
+        nlohmann::json loop = nlohmann::json::array();
+        std::string mode_s = control_ ? control_->snapshot_state().mode : "";
+        int row_i = std::atoi(cmd[2].c_str());
+        auto snap = control_ ? control_->snapshot_state() : RemoteStateSnapshot{};
+        bool is_search = row_i >= 0 && row_i < (int)snap.browse.size() &&
+                         snap.browse[row_i].title.rfind("🔍", 0) == 0;
+        if (mode_s == "FAVOURITE") {
+            nlohmann::json it;
+            it["text"] = "✕ Remove from favourites";
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"panicast", "unfav", cmd[2]});
+            it["actions"] = nlohmann::json({{"go", go}});
+            loop.push_back(it);
+        } else if (is_search && mode_s == "ONLINE") {
+            nlohmann::json it;
+            it["text"] = "✕ Delete search record";
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"panicast", "unfav", cmd[2]});
+            it["actions"] = nlohmann::json({{"go", go}});
+            loop.push_back(it);
+        } else {
+            nlohmann::json it;
+            it["text"] = "★ Add to favourites";
+            nlohmann::json go;
+            go["cmd"] = nlohmann::json::array({"panicast", "fav", cmd[2]});
+            it["actions"] = nlohmann::json({{"go", go}});
+            loop.push_back(it);
+        }
+        r["count"] = (int)loop.size();
+        r["offset"] = 0;
+        r["item_loop"] = loop;
+        return r;
     } else if (k == "panicast" && cmd.size() > 2 && (cmd[1] == "fav" || cmd[1] == "unfav")) {
         // META-7f: favourites with user feedback. The reply is a small page so the
         //   app shows a toast-like confirmation ("★ Added to favourites" / "Removed
@@ -1845,17 +1880,9 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     if (!row.art_url.empty())
                         it["icon"] = row.art_url;
                     go["cmd"] = nlohmann::json::array({"panicast", "browse", row_idx});
-                    // META-7f long-press menu with feedback: favourite everywhere,
-                    //   delete in FAVOURITE mode, delete search records in ONLINE.
+                    // META-7g: more-action opens a context MENU (bottom sheet)
                     nlohmann::json more;
-                    std::string cur_mode = control_ ? control_->snapshot_state().mode : "";
-                    if (cur_mode == "FAVOURITE")
-                        more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
-                    else if (cur_mode == "ONLINE" && row.is_branch && row.title.rfind("🔍", 0) == 0)
-                        // search-record node → delete from history
-                        more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
-                    else
-                        more["cmd"] = nlohmann::json::array({"panicast", "fav", row_idx});
+                    more["cmd"] = nlohmann::json::array({"panicast", "context", row_idx});
                     it["actions"] = nlohmann::json({{"go", go}, {"more", more}});
                     loop.push_back(it);
                     continue;
