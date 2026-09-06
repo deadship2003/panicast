@@ -57,13 +57,13 @@
 ```bash
 tar xzf panicast-V0.0.1.tar.gz
 cd panicast-V0.0.1
-./build.sh install      # JS 运行时 + 构建依赖 + 编译 + 安装 panicast（全部装到 /usr/local/bin，需 sudo）
+./setup.sh install      # JS 运行时 + 构建依赖 + 编译 + 安装 panicast（全部装到 /usr/local/bin，需 sudo）
 # 可选参数:
 #   install --no-deps   跳过系统构建依赖安装（已装好时）
 #   clean               清理 build/
 ```
 
-`build.sh` 把 `qjs`/`deno`/`panicast` 都装到 `/usr/local/bin`（系统 PATH 内，**无需改 PATH**）。`./build.sh` 按当前机器 CPU 自动检测并原生编译（无交叉编译，各平台在本机各自编译）。详见 [`vendor/quickjs/README.md`](vendor/quickjs/README.md)。
+`setup.sh` 把 `qjs`/`deno`/`panicast` 都装到 `/usr/local/bin`（系统 PATH 内，**无需改 PATH**）。`./setup.sh` 按当前机器 CPU 自动检测并原生编译（无交叉编译，各平台在本机各自编译）。详见 [`vendor/quickjs/README.md`](vendor/quickjs/README.md)。
 
 > **为什么需要 JS 运行时**：yt-dlp 2026.07+ 求解 YouTube nsig「n 挑战」必须有 JS 运行时。**推荐 quickjs-ng**（~2MB，冷启动比 deno 快约 10×，可消除首次播放 YouTube 的初始卡顿）；deno（~106MB）为回退方案。apt 的 nodejs(20) 被 yt-dlp 标记 unsupported 不生效。详见下文「运行时依赖（JS 运行时）」。
 >
@@ -524,7 +524,7 @@ panicast/
 │       └── build.yml           # GitHub Actions CI/CD
 ├── README.md                   # 项目说明
 ├── LICENSE                     # MIT 许可证
-└── build.sh                    # 构建脚本
+└── setup.sh                    # 构建脚本
 ```
 
 ---

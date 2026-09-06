@@ -1,12 +1,15 @@
 #!/bin/bash
 # ╔═══════════════════════════════════════════════════════════════════════════╗
-# ║          panicast — build + install (single script, native-only)         ║
+# ║          panicast — first-time setup & install (native-only)            ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
-# Usage:
-#   ./build.sh                     # compile for the current host CPU (auto-detected)
-#   ./build.sh install             # bootstrap: JS runtime + build deps + build + install
-#   ./build.sh install --no-deps   #   (skip the system build-deps step)
-#   ./build.sh clean               # remove build/
+# Usage (FIRST-TIME SETUP only; everyday builds use cmake directly):
+#   ./setup.sh                     # compile for the current host CPU (auto-detected)
+#   ./setup.sh install             # bootstrap: JS runtime + build deps + build + install
+#   ./setup.sh install --no-deps   #   (skip the system build-deps step)
+#   ./setup.sh clean               # remove build/
+#
+# Everyday update (after first setup):
+#   git pull && cmake --build build && sudo cmake --install build && panicast restart
 #
 # Native build only — no cross-compilation. Each machine compiles for its own CPU
 #   (uname -m auto-detected), so run the script on the target arch directly.
@@ -319,7 +322,7 @@ build_native() {  # native build for the host arch
     if [ "$MODE" != "install" ]; then
         echo
         echo -e "Binary: ${BLUE}build/panicast${NC}"
-        echo -e "Install: ${YELLOW}sudo cmake --install build${NC} (or: ./build.sh install)"
+        echo -e "Install: ${YELLOW}sudo cmake --install build${NC} (or: ./setup.sh install)"
         echo -e "Restart: ${YELLOW}panicast restart${NC}"
     fi
     # Y01: libqrencode is optional. If absent, cmake warns and Y-mode QR login falls back to text.
