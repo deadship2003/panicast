@@ -1880,9 +1880,19 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     if (!row.art_url.empty())
                         it["icon"] = row.art_url;
                     go["cmd"] = nlohmann::json::array({"panicast", "browse", row_idx});
-                    // META-7g: more-action opens a context MENU (bottom sheet)
+                    // META-7h: search records + F-mode → DIRECT delete (no menu);
+                    //   normal rows → context menu (bottom sheet with useContextMenu)
                     nlohmann::json more;
-                    more["cmd"] = nlohmann::json::array({"panicast", "context", row_idx});
+                    {
+                        std::string cm = control_ ? control_->snapshot_state().mode : "";
+                        bool is_search = row.title.rfind("🔍", 0) == 0 && cm == "ONLINE";
+                        if (is_search || cm == "FAVOURITE") {
+                            more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
+                        } else {
+                            more["cmd"] = nlohmann::json::array({"panicast", "context", row_idx});
+                            more["params"] = nlohmann::json({{"useContextMenu", "1"}});
+                        }
+                    }
                     it["actions"] = nlohmann::json({{"go", go}, {"more", more}});
                     loop.push_back(it);
                     continue;
