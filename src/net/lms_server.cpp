@@ -1106,6 +1106,11 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     }
     if (s.has_media) {
         r["current_title"] = disp_title;
+        // TOP-LEVEL metadata — real LMS sends artist/album alongside title.
+        //   The Android notification (MediaService → MediaMetadata) reads these;
+        //   missing → "Unknown artist/album" in the mini-player bar.
+        r["artist"] = disp_artist.empty() ? "panicast" : disp_artist;
+        r["album"] = s.album.empty() ? "panicast" : s.album;
         r["title"] = disp_title;
         if (!s.art_url.empty())
             r["art_url"] = s.art_url;
