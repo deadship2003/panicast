@@ -261,6 +261,7 @@ public:
     // Login auth (LMS CLI `login <user> <pass>` / HTTP Basic): factory default
     //   panicast/panicast — auth ON out of the box. Explicitly empty lms_pass disables it.
     std::string get_remote_lms_user() const;
+    std::string get_remote_player_name() const;
     std::string get_remote_lms_pass() const;
 
     // ─── Network proxy config ([network] proxy) ──────────────────────────────

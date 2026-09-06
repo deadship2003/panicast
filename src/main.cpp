@@ -111,20 +111,16 @@ int main(int argc, char *argv[]) {
     /* CLI long options: --purge, --quiet, --vid, --vo, --ao, --help, --version.
        (--daemon stays as an INTERNAL long option: the user service unit's ExecStart
        uses it — nobody types it. The -d short form is gone per N10.3.) */
-    static struct option long_options[] = {{"daemon", no_argument, 0, 'd'},
-                                           
-                                           
-                                           {"purge", no_argument, 0, 'P'},
-                                           {"quiet", no_argument, 0, 'q'},
-                                           {"vid", required_argument, 0, 'V'},
-                                           {"vo", required_argument, 0, 'O'},
-                                           {"ao", required_argument, 0, 'A'},
-                                           {"help", no_argument, 0, 'h'},
-                                           {"version", no_argument, 0, 'v'},
-                                           {0, 0, 0, 0}};
+    static struct option long_options[] = {
+        {"daemon", no_argument, 0, 'd'},
+
+        {"purge", no_argument, 0, 'P'},     {"quiet", no_argument, 0, 'q'},
+        {"vid", required_argument, 0, 'V'}, {"vo", required_argument, 0, 'O'},
+        {"ao", required_argument, 0, 'A'},  {"help", no_argument, 0, 'h'},
+        {"version", no_argument, 0, 'v'},   {0, 0, 0, 0}};
 
     std::string cli_vo, cli_vid, cli_ao; /* CLI overrides (empty = use defaults) */
-    bool daemon_mode = false;      /* --daemon (internal): headless daemon for the service unit */
+    bool daemon_mode = false; /* --daemon (internal): headless daemon for the service unit */
 
     int option_index = 0;
     while ((opt = getopt_long(argc, argv, "a:i:e:t:h?v", long_options, &option_index)) != -1) {
@@ -211,6 +207,10 @@ int main(int argc, char *argv[]) {
         }
         return 0;
     }
+
+    // META-7a: WSLg audio env for the systemd service context (see daemon_mode.cpp)
+    if (::access("/mnt/wslg/PulseServer", F_OK) == 0 && !std::getenv("PULSE_SERVER"))
+        ::setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer", 0);
 
     curl_global_init(CURL_GLOBAL_ALL);
     xmlInitParser();

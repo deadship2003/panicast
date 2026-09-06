@@ -42,6 +42,7 @@
 
 #include <sys/socket.h> // sockaddr_storage (peer_allowed — POSIX-only module)
 
+#include "panicast/config/ini_config.h"
 #include "panicast/net/remote_protocol.h"
 
 namespace panicast
@@ -109,8 +110,8 @@ public:
     static const char *player_id() {
         return "00:00:00:00:84:21";
     }
-    static const char *player_name() {
-        return "panicast";
+    static std::string player_name() {
+        return IniConfig::instance().get_remote_player_name();
     }
 
 private:

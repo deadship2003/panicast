@@ -192,6 +192,11 @@ std::string IniConfig::get_remote_lms_pass() const {
     return get("remote", "lms_pass", "panicast");
 }
 
+std::string IniConfig::get_remote_player_name() const {
+    // Display name of the virtual player Squeezer sees. Empty → "panicast".
+    return get("remote", "player_name", "panicast");
+}
+
 // ── misc getters: search/history/region/network/display (D27: moved out-of-line) ──
 int IniConfig::get_search_cache_max() {
     return get_int("storage", "search_cache_max", 1024);
@@ -947,6 +952,9 @@ lms_port = 9090
 #   默认仅家庭网段 + 本机回环；Squeezer 手机需在此网段内 / default: home LAN + loopback only
 #   留空 = 允许任意源（不建议）/ empty = allow ALL sources (not recommended)
 lms_allow = 192.168.0.0/16,127.0.0.0/8
+# 播放器显示名（Squeezer 播放器列表/正在播放界面显示；空 = "panicast"）
+#   player display name in Squeezer's player list & now-playing screen
+player_name =
 # 服务器显示名（Squeezer 扫描列表里展示；空 = 主机名）/ display name in Squeezer's
 #   server picker (empty = hostname). 多台主机各设一个可区分的名字最有用。
 server_name =
