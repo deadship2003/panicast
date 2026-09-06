@@ -414,15 +414,13 @@ void ensure_user_unit() {
     char self[4096];
     ssize_t n = ::readlink("/proc/self/exe", self, sizeof(self) - 1);
     std::string exe = n > 0 ? std::string(self, (size_t)n) : "/usr/local/bin/panicast";
+    // NOTE: no audio env on purpose. libpulse discovers the socket via the standard
+    //   $XDG_RUNTIME_DIR/pulse/native path — pipewire/pulseaudio provide it natively,
+    //   and WSLg maintains it as a symlink into /mnt/wslg (verified: pactl connects
+    //   through it with PULSE_SERVER unset). Hardcoding PULSE_SERVER here once pointed
+    //   Arch at a nonexistent WSLg path → AO=null → silent playback.
     std::string unit = std::string("# panicast user-space service (installed automatically by ") +
-                       "the first run — N10.3).\n"
-                       // WSLg only: point pulse at the WSLg server (shells get this via
-                       //   /etc/profile.d, a user service does NOT). On a native host this
-                       //   env would OVERRIDE the working pipewire/pulse socket with a
-                       //   nonexistent path → mpv AO=null → silent playback (seen on Arch).
-                       + (::access("/mnt/wslg/PulseServer", F_OK) == 0
-                              ? "Environment=PULSE_SERVER=unix:/mnt/wslg/PulseServer\n"
-                              : "");
+                       "the first run — N10.3).\n";
     "#   Manage with: panicast start|stop|restart|enable|disable (all "
     "sudo-free, systemctl --user).\n"
     "[Unit]\n"

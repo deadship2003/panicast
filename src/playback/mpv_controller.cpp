@@ -158,11 +158,14 @@ bool MPVController::create_context_() {
     const char *ao_actual = mpv_get_property_string(ctx, "current-ao");
     LOG(fmt::format("[MPV] Actual VO={}, AO={}", vo_actual ? vo_actual : "null",
                     ao_actual ? ao_actual : "null"));
-    // Y24.8: warn prominently if the audio output driver failed to init — playback cannot produce
-    //   sound (mpv will later emit AO_INIT_FAILED -14). Common on WSL2 when PulseAudio/WSLg is down.
-    if (!ao_actual || ao_actual[0] == '\0') {
-        EVENT_LOG("MPV: No audio output driver (AO=null) — playback will fail silently. "
-                  "Set [mpv] ao (pulse/pipewire/alsa) or start PulseAudio/WSLg, then restart.");
+    // Y24.8: warn prominently if the audio output driver failed to init — playback cannot
+    //   produce sound (mpv later emits AO_INIT_FAILED -14). AO-AUTO: with ao unpinned, mpv
+    //   only COMMITS an output at first playback, so a null current-ao at init is normal —
+    //   warn only when the user pinned a driver and even that didn't come up.
+    if ((!ao_actual || ao_actual[0] == '\0') &&
+        !IniConfig::instance().get("mpv", "ao", "").empty()) {
+        EVENT_LOG("MPV: pinned audio output failed to init (AO=null) — playback will fail "
+                  "silently. Check [mpv] ao / your audio server, then restart.");
     }
     if (vo_actual)
         mpv_free((void *)vo_actual);

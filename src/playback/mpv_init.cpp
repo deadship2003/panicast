@@ -59,12 +59,10 @@ void MPVController::apply_mpv_options_(mpv_handle *ctx) {
     //   CLI overrides (--vo, --vid, --ao, --quiet = --vo=null --vid=no) take precedence over INI values.
     std::string mpv_vo = IniConfig::instance().get_mpv_vo();
     std::string mpv_vid = IniConfig::instance().get_mpv_vid();
-    std::string mpv_ao = IniConfig::instance().get_mpv_ao(); // F40: returns pulse,alsa if INI empty
-    // F40: one-time INI fixup — if ao was empty/absent, persist the default so it's visible/editable
-    //   (old config.ini had "ao =" empty → overrode the default → needed explicit --ao=pulse).
-    if (IniConfig::instance().get("mpv", "ao", "").empty()) {
-        IniConfig::instance().set("mpv", "ao", "pulse,alsa");
-    }
+    // AO-AUTO: empty ao = mpv's own auto-detection (pipewire→pulse→alsa…). We only
+    //   pass --ao when the user pinned something; pinning also survives F40-era configs
+    //   that stored "pulse,alsa" explicitly (still honoured as-is).
+    std::string mpv_ao = IniConfig::instance().get_mpv_ao();
     if (!cli_vo_override_.empty())
         mpv_vo = cli_vo_override_;
     if (!cli_vid_override_.empty())
@@ -85,7 +83,8 @@ void MPVController::apply_mpv_options_(mpv_handle *ctx) {
             mpv_set_option_string(ctx, "hwdec", mpv_hwdec.c_str());
     }
     if (!mpv_ao.empty())
-        mpv_set_option_string(ctx, "ao", mpv_ao.c_str()); // empty = leave mpv default (auto)
+        if (!mpv_ao.empty())
+            mpv_set_option_string(ctx, "ao", mpv_ao.c_str()); // empty = leave mpv default (auto)
     std::string mpv_ytdl_format = IniConfig::instance().get_mpv_ytdl_format();
     init_ytdl_format_ = mpv_ytdl_format; // D50: snapshot for play_video() re-assertion
     mpv_set_option_string(ctx, "ytdl-format", mpv_ytdl_format.c_str());

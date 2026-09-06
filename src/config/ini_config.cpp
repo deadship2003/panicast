@@ -34,7 +34,6 @@ template <typename Writer> bool write_atomic(const std::string &path, Writer &&w
 }
 } // namespace
 
-
 // ── mpv-config getters (D24: moved out-of-line from ini_config.h) ──
 std::string IniConfig::get_mpv_vo() const {
     return get("mpv", "vo", "auto");
@@ -43,10 +42,11 @@ std::string IniConfig::get_mpv_vid() const {
     return get("mpv", "vid", "auto");
 }
 std::string IniConfig::get_mpv_ao() const {
-    // F40: treat empty INI value as the default (old config.ini had "ao =" empty,
-    //   which otherwise overrides the default → mpv auto → pipewire probe noise).
-    std::string v = get("mpv", "ao", "pulse,alsa");
-    return v.empty() ? "pulse,alsa" : v;
+    // AO-AUTO: empty = mpv auto-detect (compiled-in order pipewire→pulse→alsa…).
+    //   libpulse finds the socket via the standard $XDG_RUNTIME_DIR/pulse/native path
+    //   on native hosts AND under WSLg (symlink) — no platform detection, no pinning.
+    //   Pin explicitly (e.g. "pulse" / "alsa") only to override diagnosis.
+    return get("mpv", "ao", "");
 }
 std::string IniConfig::get_mpv_ytdl_format() const {
     return get("mpv", "ytdl_format", "bestvideo+bestaudio");
@@ -101,7 +101,6 @@ std::string IniConfig::get_mpv_sub_lang() const {
     return get("mpv", "sub_lang", "en");
 }
 
-
 // ── YouTube-config getters (D25: moved out-of-line from ini_config.h) ──
 std::string IniConfig::get_youtube_cookies_file() const {
     return resolve_cookies_path("youtube", "cookies_file", "youtube_cookie.txt");
@@ -131,7 +130,6 @@ std::string IniConfig::get_youtube_sub_lang() const {
 bool IniConfig::get_youtube_sub_auto() const {
     return get_bool("youtube", "sub_auto", true);
 }
-
 
 // ── cookies / IPTV / remote-control getters (D26: moved out-of-line) ──
 std::string IniConfig::get_bilibili_cookies_file() const {
@@ -194,7 +192,6 @@ std::string IniConfig::get_remote_lms_pass() const {
     return get("remote", "lms_pass", "panicast");
 }
 
-
 // ── misc getters: search/history/region/network/display (D27: moved out-of-line) ──
 int IniConfig::get_search_cache_max() {
     return get_int("storage", "search_cache_max", 1024);
@@ -221,7 +218,6 @@ bool IniConfig::get_url_hyperlink() const {
     return get_bool("display", "url_hyperlink", true);
 }
 
-
 // ── display getters ([display] section) (D28: moved out-of-line from ini_config.h) ──
 float IniConfig::get_log_height_ratio() const {
     return get_float("display", "log_height_ratio", 0.3f);
@@ -244,7 +240,6 @@ bool IniConfig::get_display_lyric_bar() const {
 int IniConfig::get_display_lyric_bar_height() const {
     return get_int("display", "lyric_bar_height", 5);
 }
-
 
 // ── core accessors: load/save/get_int/set (D29: moved out-of-line from ini_config.h) ──
 void IniConfig::load() {
@@ -324,54 +319,53 @@ void IniConfig::save() {
     if (path.empty())
         return;
     write_atomic(path, [&](std::ostream &f) {
-    std::set<std::string> written; // "section\x1fkey"
-    std::string current_section;
-    for (const auto &raw : raw_lines_) {
-        std::string line = raw;
-        size_t a = line.find_first_not_of(" \t");
-        if (a == std::string::npos) {
-            f << raw << "\n";
-            continue;
-        }
-        if (line[a] == '#' || line[a] == ';') {
-            f << raw << "\n";
-            continue;
-        }
-        if (line[a] == '[') {
-            size_t rb = line.find(']', a);
-            if (rb != std::string::npos)
-                current_section = line.substr(a + 1, rb - a - 1);
-            f << raw << "\n";
-            continue;
-        }
-        size_t eq = line.find('=', a);
-        if (eq == std::string::npos) {
-            f << raw << "\n";
-            continue;
-        }
-        std::string key = line.substr(a, eq - a);
-        key.erase(key.find_last_not_of(" \t") + 1);
-        std::string id = current_section + "\x1f" + key;
-        if (data_.count(current_section) && data_[current_section].count(key)) {
-            f << key << " = " << data_[current_section][key] << "\n";
-            written.insert(id);
-        } else {
-            f << raw << "\n";
-        }
-    }
-    // Append new keys not present in the file
-    for (const auto &[section, kv] : data_) {
-        for (const auto &[k, v] : kv) {
-            std::string id = section + "\x1f" + k;
-            if (!written.count(id)) {
-                f << "[" << section << "]\n" << k << " = " << v << "\n";
+        std::set<std::string> written; // "section\x1fkey"
+        std::string current_section;
+        for (const auto &raw : raw_lines_) {
+            std::string line = raw;
+            size_t a = line.find_first_not_of(" \t");
+            if (a == std::string::npos) {
+                f << raw << "\n";
+                continue;
+            }
+            if (line[a] == '#' || line[a] == ';') {
+                f << raw << "\n";
+                continue;
+            }
+            if (line[a] == '[') {
+                size_t rb = line.find(']', a);
+                if (rb != std::string::npos)
+                    current_section = line.substr(a + 1, rb - a - 1);
+                f << raw << "\n";
+                continue;
+            }
+            size_t eq = line.find('=', a);
+            if (eq == std::string::npos) {
+                f << raw << "\n";
+                continue;
+            }
+            std::string key = line.substr(a, eq - a);
+            key.erase(key.find_last_not_of(" \t") + 1);
+            std::string id = current_section + "\x1f" + key;
+            if (data_.count(current_section) && data_[current_section].count(key)) {
+                f << key << " = " << data_[current_section][key] << "\n";
                 written.insert(id);
+            } else {
+                f << raw << "\n";
             }
         }
-    }
+        // Append new keys not present in the file
+        for (const auto &[section, kv] : data_) {
+            for (const auto &[k, v] : kv) {
+                std::string id = section + "\x1f" + k;
+                if (!written.count(id)) {
+                    f << "[" << section << "]\n" << k << " = " << v << "\n";
+                    written.insert(id);
+                }
+            }
+        }
     });
 }
-
 
 // ── logic + static helpers: statusbar/play-mode/proxy/color/url/config-file (D30: moved out-of-line) ──
 StatusBarColorConfig IniConfig::get_statusbar_color_config() {
@@ -485,8 +479,8 @@ short IniConfig::resolve_color(const std::string &s, short fallback) {
     //   config header need not pull ncurses (see docs/ARCHITECTURE.md §2.1). Values are
     //   identical to ncurses COLOR_BLACK..COLOR_WHITE; -1 = default passthrough.
     static const std::map<std::string, short> names = {
-        {"black", 0}, {"red", 1}, {"green", 2}, {"yellow", 3},
-        {"blue", 4},  {"magenta", 5}, {"cyan", 6}, {"white", 7}, {"default", -1}};
+        {"black", 0},   {"red", 1},  {"green", 2}, {"yellow", 3},  {"blue", 4},
+        {"magenta", 5}, {"cyan", 6}, {"white", 7}, {"default", -1}};
     auto it = names.find(t);
     if (it != names.end())
         return it->second;
@@ -525,7 +519,6 @@ std::string IniConfig::get_config_file() {
     return home ? std::string(home) + CONFIG_DIR + "/config.ini" : "";
 }
 
-
 // ── create_default: auto-generated default config template (D31: moved out-of-line) ──
 void IniConfig::create_default(const std::string &path) {
     write_atomic(path, [&](std::ostream &f) {
@@ -534,8 +527,8 @@ void IniConfig::create_default(const std::string &path) {
         f << "\xEF\xBB\xBF";
         f << R"(# ============================================================
 # panicast Configuration File
-# Version: )" << VERSION
-          << R"(
+# Version: )"
+          << VERSION << R"(
 # Author: Panic
 # ============================================================
 #
@@ -738,7 +731,9 @@ vid = auto
 #     noisily on WSLg (no native pipewire) — hence the explicit default.
 #   pulse / pipewire / alsa / auto = force a specific driver/order
 # CLI: --ao=<val> overrides
-ao = pulse,alsa
+# 空 = mpv 自动选择音频输出(pipewire→pulse→alsa…,WSLg/原生通用)/ empty = mpv
+#   auto-detect audio output (works on both WSLg and native pipewire/pulse)
+ao =
 # yt-dlp format selection
 ytdl_format = bestvideo+bestaudio
 # HTTP User-Agent (some CDNs reject default mpv UA)
