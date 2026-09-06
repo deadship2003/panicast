@@ -1183,7 +1183,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
-    } else if (k == "panicast" && cmd.size() > 1 && cmd[1] == "browse") {
+    } else if (k == "panicast" && cmd.size() > 1 && (cmd[1] == "browse" || cmd[1] == "mode")) {
         // ── Remote library browse (Squeeze Client's main screen) ──────────────────
         //   The remote mirrors the TUI's CURRENT mode list: rows are display_list
         //   entries, tapping a row = cursor+Enter (nav_activate) — branch rows
@@ -1193,7 +1193,44 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         std::string where = cmd.size() > 2 ? cmd[2] : "root";
         int start = cmd.size() > 3 ? std::atoi(cmd[3].c_str()) : 0;
         int window = cmd.size() > 4 ? std::atoi(cmd[4].c_str()) : 0;
-        if (control_) {
+        const bool is_mode_switch = cmd[1] == "mode";
+        if (is_mode_switch) {
+            // `panicast mode <NAME>` — tap on a home-menu mode entry: switch the App
+            //   mode (same action the PRP remote uses), wait for the mirrored list to
+            //   follow (the mode is part of browse_sig, so the switch is visible to
+            //   the settle logic), then fall through to the page builder below.
+            static const std::vector<std::string> modes = {
+                "RADIO",   "PODCAST",  "FAVOURITE", "HISTORY", "ONLINE",
+                "ACCOUNT", "BILIBILI", "TIKTOK",    "IPTV",
+            };
+            bool known = std::find(modes.begin(), modes.end(), where) != modes.end();
+            if (!known)
+                return empty_page();
+            if (control_) {
+                std::string before_sig = control_->snapshot_state().browse_sig;
+                std::string cur_mode = control_->snapshot_state().mode;
+                if (cur_mode != where) {
+                    push_arg("mode", where);
+                    std::string prev = before_sig;
+                    int still = 0;
+                    for (int i = 0; i < 60 && running_.load(); ++i) { // ≤3s
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                        std::string cur = control_->snapshot_state().browse_sig;
+                        if (cur != before_sig) {
+                            still = cur == prev ? still + 1 : 0;
+                            prev = cur;
+                            if (still >= 6)
+                                break;
+                        } else {
+                            prev = cur;
+                        }
+                    }
+                }
+            }
+            // The page builder below needs to see the "root" of the new mode.
+            start = 0;
+        }
+        if (control_ && !is_mode_switch) {
             std::string before_sig = control_->snapshot_state().browse_sig;
             bool wait_change = false;
             int wait_budget = 100; // 50ms units: 5s for async branch loads
@@ -1276,19 +1313,27 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   the queue; rows carry per-item "playlist index" go actions from
         //   status_data). Requires count/offset as JSON NUMBERS
         //   (JiveHomeItemListResponse: Int) and every item needs id+node (Strings).
-        std::string mode_name = control_ ? control_->snapshot_state().mode : "LIBRARY";
+        std::string mode_name = control_ ? control_->snapshot_state().mode : "RADIO";
         nlohmann::json r;
         nlohmann::json loop = nlohmann::json::array();
-        {
+        // One entry per App mode (tap = switch + open that mode's list). The CURRENT
+        //   mode is marked so the phone shows where you are; switching from the phone
+        //   switches the TUI too — both frontends share one engine by design.
+        //   node MUST be "home" on every entry: release builds (2.4) render the home
+        //   screen by filtering on node == "home" — anything else never shows.
+        static const std::vector<std::string> modes = {
+            "RADIO",   "PODCAST",  "FAVOURITE", "HISTORY", "ONLINE",
+            "ACCOUNT", "BILIBILI", "TIKTOK",    "IPTV",
+        };
+        int weight = 1;
+        for (const auto &m : modes) {
             nlohmann::json go;
-            go["cmd"] = nlohmann::json::array({"panicast", "browse", "root"});
+            go["cmd"] = nlohmann::json::array({"panicast", "mode", m});
             nlohmann::json item;
-            item["id"] = "library";
-            // node MUST be "home": release builds (2.4) render the home screen by
-            //   filtering menu items on node == "home" — anything else never shows.
+            item["id"] = "mode-" + m;
             item["node"] = "home";
-            item["text"] = "panicast · " + mode_name;
-            item["weight"] = 1;
+            item["text"] = (m == mode_name ? "▶ " : "") + m;
+            item["weight"] = weight++;
             item["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(item);
         }
@@ -1299,11 +1344,11 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             item["id"] = "currentplaylist";
             item["node"] = "home";
             item["text"] = "Current Playlist";
-            item["weight"] = 2;
+            item["weight"] = weight;
             item["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(item);
         }
-        r["count"] = 2;
+        r["count"] = (int)loop.size();
         r["offset"] = 0;
         r["item_loop"] = loop;
         return r;

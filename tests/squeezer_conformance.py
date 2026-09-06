@@ -253,8 +253,16 @@ def main():
               str(brows[0])[:120])
     bk = c.slim(["panicast", "browse", "back", "0", "512"])
     check("browse back well-formed", is_num(bk.get("count")) and "item_loop" in bk)
-    check("menu has 2 entries", is_num(menu.get("count")) and menu.get("count") == 2,
-          str(menu.get("count")))
+    check("menu has all 9 modes + playlist (10 entries)",
+          is_num(menu.get("count")) and menu.get("count") == 10, str(menu.get("count")))
+    modews = [i.get("actions", {}).get("go", {}).get("cmd", [])[:2] for i in items
+              if str(i.get("id", "")).startswith("mode-")]
+    check("mode entries carry panicast-mode go cmds",
+          len(modews) == 9 and all(c[:2] == ["panicast", "mode"] for c in modews),
+          str(modews)[:120])
+    ms = c.slim(["panicast", "mode", "RADIO", "0", "512"])
+    check("mode switch well-formed page", is_num(ms.get("count")) and "item_loop" in ms)
+    check("unknown mode → empty page", c.slim(["panicast", "mode", "NOPE"]).get("count") == 0)
 
     print("== mute / sleep / buttons ==")
     st0 = c.slim(["status", "-", "1"])
