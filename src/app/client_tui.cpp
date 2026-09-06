@@ -268,25 +268,90 @@ int run_client_tui() {
         "+/-:vol  m:mute  ,/.:seek  q:quit";
 
     bool running = true;
-    auto run_search = [&]() {
-        // 's' — local text input → search_query on the daemon → replace the list
-        //   with the reply (same page shape the Squeezer input row produces).
+    // Local one-line input at the top (blocking read, echo on). Returns "" on
+    //   cancel/empty. Shared by the search box and the ':' mpv box.
+    auto prompt_line = [&](const char *label) -> std::string {
         echo();
         curs_set(1);
-        int rows_n, cols_n;
-        getmaxyx(stdscr, rows_n, cols_n);
-        (void)rows_n;
-        mvaddstr(0, 0, " Search: ");
+        move(0, 0);
         clrtoeol();
-        char buf[256] = {0};
-        timeout(-1); // blocking read while typing
-        mvgetnstr(0, 9, buf, sizeof(buf) - 1);
+        mvaddstr(0, 0, label);
+        char buf[512] = {0};
+        timeout(-1);
+        mvgetnstr(0, strlen(label), buf, (int)sizeof(buf) - 1);
         timeout(300);
         noecho();
         curs_set(0);
-        std::string q(buf);
-        while (!q.empty() && (q.back() == ' '))
-            q.pop_back();
+        std::string s(buf);
+        while (!s.empty() && s.back() == ' ')
+            s.pop_back();
+        return s;
+    };
+
+    // ':' box — raw mpv command (space-split into argv, sent via the mpv verb).
+    auto run_mpv_cmd = [&]() {
+        std::string line = prompt_line(" mpv> ");
+        if (line.empty())
+            return;
+        std::vector<std::string> args;
+        std::string cur;
+        for (char c : line) {
+            if (c == ' ') {
+                if (!cur.empty())
+                    args.push_back(cur);
+                cur.clear();
+            } else {
+                cur += c;
+            }
+        }
+        if (!cur.empty())
+            args.push_back(cur);
+        if (args.empty())
+            return;
+        std::vector<std::string> cmd = {"panicast", "mpv"};
+        cmd.insert(cmd.end(), args.begin(), args.end());
+        st.lms.slim(cmd);
+    };
+
+    // '?' — help overlay (any key dismisses).
+    auto show_help = [&]() {
+        static const char *help[] = {
+            "panicast client — keys",
+            "",
+            "Enter    open / play row        BS,b  back one level",
+            "1-9      switch mode            Tab   tree <-> queue view",
+            "space    play/pause             n,p   next / previous track",
+            "+,- / m  volume up/down / mute  ,,.   seek -10s/+10s",
+            "s        search (input box)     r,R,S cycle/repeat/shuffle",
+            "x,z,X    speed up/down/reset    L     subtitle toggle",
+            "f        favourite              d     download row",
+            ":        mpv command box        q     quit (service keeps running)",
+            "",
+            "The engine stays in the background service the whole time;",
+            "this controller only sends commands over its control plane.",
+        };
+        int h = (int)(sizeof(help) / sizeof(help[0]));
+        int rows_n, cols_n;
+        getmaxyx(stdscr, rows_n, cols_n);
+        int w = std::min(cols_n - 4, 58), x0 = (cols_n - w) / 2, y0 = (rows_n - h - 2) / 2;
+        WINDOW *win = newwin(h + 2, w, std::max(0, y0), std::max(0, x0));
+        box(win, 0, 0);
+        for (int i = 0; i < h; ++i)
+            mvwaddnstr(win, i + 1, 2, help[i], w - 4);
+        wattron(win, A_BOLD);
+        mvwaddstr(win, 1, 2, help[0]);
+        wattroff(win, A_BOLD);
+        wrefresh(win);
+        timeout(-1);
+        wgetch(win);
+        timeout(300);
+        delwin(win);
+    };
+
+    auto run_search = [&]() {
+        // 's' — local text input → search_query on the daemon → replace the list
+        //   with the reply (same page shape the Squeezer input row produces).
+        std::string q = prompt_line(" Search: ");
         if (q.empty())
             return;
         nlohmann::json r = st.lms.slim({"panicast", "search", q, "0", "400"});
@@ -353,7 +418,7 @@ int run_client_tui() {
                   cols_n - 1);
         mvaddnstr(rows_n - 1, 0,
                   "s:search  r:cycle R:repeat S:shuffle  x/z:X speed  L:subs  f:fav  "
-                  "d:download  q:quit",
+                  "d:download  ::mpv  ?:help  q:quit",
                   cols_n - 1);
         refresh();
 
@@ -444,6 +509,12 @@ int run_client_tui() {
             break;
         case 's':
             run_search();
+            break;
+        case ':':
+            run_mpv_cmd();
+            break;
+        case '?':
+            show_help();
             break;
         case 'r':
             st.lms.slim({"panicast", "playmode", "cycle"});
