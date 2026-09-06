@@ -289,17 +289,16 @@ int main(int argc, char *argv[]) {
         //   opens a local CLIENT TUI over its control plane — the service process
         //   is not touched at all (no takeover, no restart, phone keeps streaming).
         //   The standalone engine TUI (below) only boots when nothing is running.
-        // N10.8 (user-final model): ONE process owns the engine — the background
-        //   service, or the first TUI started when no service ran. Every LATER
-        //   `panicast` ATTACHES as the lightweight client controller over that
-        //   owner's control plane (never blocked, any number of instances; works
-        //   against both a running service AND a TUI-hosted engine). The full
-        //   engine TUI only boots when NOTHING owns the engine, or with --full
-        //   (which then takes over via the N10.5 zero-drop handover).
-        (void)force_client_tui; // --client is the DEFAULT whenever an engine owner
-                                //   exists (N10.8); the flag stays accepted for
-                                //   explicitness / script stability.
-        if (!force_full_tui && (panicast::daemon_pid_alive() || panicast::tui_pid_alive())) {
+        // N10.9 (user-final, THIRD confirmation): interactive terminal → the FULL
+        //   engine TUI. Always. The N10.5 zero-drop handover takes the sockets
+        //   over from whatever owns the engine (background service or another
+        //   TUI) and hands them back on exit — Squeezer never notices, so there
+        //   is zero cost to taking over. The lightweight client controller serves
+        //   NON-interactive invocations (scripts/pipes/no TTY) and `--client`.
+        //   DO NOT make the client controller the default for TTY again.
+        if (isatty(STDIN_FILENO) && !force_client_tui) {
+            // fall through to the full engine TUI below (takeover + handover)
+        } else if (!force_full_tui && (panicast::daemon_pid_alive() || panicast::tui_pid_alive())) {
             return panicast::run_client_tui();
         }
         // N10.3: FIRST-RUN AUTO-SERVICE — install/refresh the user-space unit before
