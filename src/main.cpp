@@ -18,6 +18,7 @@
 #include "panicast/ui/ui.h"
 #include "panicast/app/app.h"
 #include "panicast/app/cli_commands.h"
+#include "panicast/app/client_tui.h"
 #include "panicast/app/daemon_mode.h"
 
 #if __has_include("version.h")
@@ -270,6 +271,13 @@ int main(int argc, char *argv[]) {
             return 1;
         }
     } else {
+        // N10.6: the service IS the engine. When it's already running, `panicast`
+        //   opens a local CLIENT TUI over its control plane — the service process
+        //   is not touched at all (no takeover, no restart, phone keeps streaming).
+        //   The standalone engine TUI (below) only boots when nothing is running.
+        if (panicast::daemon_pid_alive()) {
+            return panicast::run_client_tui();
+        }
         // N10.3: FIRST-RUN AUTO-SERVICE — install/refresh the user-space unit before
         //   anything else (sudo-free; ExecStart = this binary). The handover-restore
         //   on exit then starts it, so one `panicast` run leaves the background

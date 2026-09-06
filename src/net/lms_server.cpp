@@ -1078,6 +1078,7 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     //   distinguishable from "not muted at 0".
     r["mixer volume"] = muted_.load() ? -(s.volume) - 1 : s.volume;
     r["count"] = (int)s.playlist.size();
+    r["browse_sig"] = s.browse_sig; // N10.6: client-TUI refetch trigger (change = list moved)
     // NOTE: no "offset" — PlayerStatusResponse declares it String? while the browse
     //   decoders declare Int; omitting satisfies both (defaults cover it).
     if (s.has_media) {
