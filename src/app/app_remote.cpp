@@ -151,18 +151,28 @@ void App::update_remote_state_cache() {
         s.url = ps.current_url;
         s.has_video = ps.has_video;
     }
-    // ART-2: display metadata — the app shows "unknown artist/album" for blanks, so
-    //   always provide a source name (parent feed/station/channel) + a mode context.
+    s.icy_title = ps.icy_title; // META-1: radio now-playing "Artist - Title"
+    // META-1: display metadata — structured fields first (RSS itunes:author / feed
+    //   title / channel name), then the parent/channel heuristics, so the remote
+    //   never has to show "unknown artist/album".
     {
-        std::string src_name;
+        std::string artist, album;
         if (TreeNodePtr pn = playback_.playback_node()) {
-            if (TreeNodePtr par = pn->parent.lock())
-                src_name = par->title;
-            if (src_name.empty())
-                src_name = pn->channel_name;
+            artist = pn->artist;
+            album = pn->album;
+            if (artist.empty()) {
+                if (TreeNodePtr par = pn->parent.lock())
+                    artist = par->title;
+            }
+            if (artist.empty())
+                artist = pn->channel_name;
+            if (album.empty()) {
+                if (TreeNodePtr par = pn->parent.lock())
+                    album = par->title;
+            }
         }
-        s.artist = src_name.empty() ? "panicast" : src_name;
-        s.album = "panicast · " + s.mode;
+        s.artist = artist.empty() ? "panicast" : artist;
+        s.album = album.empty() ? "panicast · " + s.mode : album;
     }
     s.playlist_pos = ps.playlist_pos;
     s.playlist_count = ps.playlist_count;
@@ -179,7 +189,7 @@ void App::update_remote_state_cache() {
         std::lock_guard<std::mutex> lk(playback_.playlist_mutex());
         s.playlist.reserve(playback_.playlist().size());
         for (const auto &it : playback_.playlist()) {
-            s.playlist.push_back({it.title, it.duration, it.is_video});
+            s.playlist.push_back({it.title, it.duration, it.is_video, it.artist, it.album});
         }
     }
 

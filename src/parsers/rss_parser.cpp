@@ -67,10 +67,18 @@ TreeNodePtr RSSParser::parse(std::string xml, const std::string &feed_url) {
 
     // Episodes without their own artwork inherit the feed cover — the remote browse
     //   rows and the now-playing screen then show one consistent logo per podcast.
-    for (auto &e : channel->children)
+    //   META-1: artist falls back to the feed's itunes:author; album is the feed
+    //   title (a podcast episode's "album" IS its show).
+    for (auto &e : channel->children) {
         if (e->art_url.empty())
             e->art_url = channel->art_url;
-    return channel; // doc is released automatically by XmlDocGuard
+        if (e->artist.empty())
+            e->artist = channel->artist;
+        if (e->album.empty())
+            e->album = channel->title;
+    }
+    channel->album = channel->title; // the feed row itself
+    return channel;                  // doc is released automatically by XmlDocGuard
 }
 
 void RSSParser::parse_channel(xmlNodePtr ch, TreeNodePtr c) {
@@ -100,10 +108,11 @@ void RSSParser::parse_channel(xmlNodePtr ch, TreeNodePtr c) {
             }
         }
         // iTunes extension - author
-        else if (strcmp(local_name, "itunes:author") == 0) {
+        else if (strcmp(local_name, "itunes:author") == 0 ||
+                 strcmp(local_name, "author") == 0) { // libxml strips the ns prefix
             xmlChar *t = xmlNodeGetContent(p);
             if (t) {
-                // Could store author information
+                c->artist = (const char *)t; // META-1: podcast author/creator
                 xmlFree(t);
             }
         }
@@ -280,9 +289,22 @@ TreeNodePtr RSSParser::parse_item(xmlNodePtr it) {
                 ep->duration = d;
             }
         }
-        // iTunes extension - author (stored in extra field, currently unused)
+        // iTunes extension - author (episode-level overrides the feed's)
         else if (strcmp(local_name, "author") == 0 || strcmp(local_name, "itunes:author") == 0) {
-            // Could store author information; currently ignored
+            xmlChar *t = xmlNodeGetContent(i);
+            if (t) {
+                ep->artist = (const char *)t; // META-1
+                xmlFree(t);
+            }
+        }
+        // iTunes extension - episode number (S/E notation lands in track_num)
+        else if (strcmp(local_name, "itunes:episode") == 0 ||
+                 strcmp(local_name, "episode") == 0) { // libxml strips the ns prefix
+            xmlChar *t = xmlNodeGetContent(i);
+            if (t) {
+                ep->track_num = atoi((const char *)t); // META-1
+                xmlFree(t);
+            }
         }
         // iTunes extension - image (episode artwork; often the feed cover). libxml
         //   strips the namespace prefix from ->name for xmlns-declared elements, so

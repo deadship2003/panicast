@@ -1082,18 +1082,31 @@ nlohmann::json LmsServer::status_data(int start, int window) {
     r["browse_sig"] = s.browse_sig; // N10.6: client-TUI refetch trigger (change = list moved)
     // NOTE: no "offset" — PlayerStatusResponse declares it String? while the browse
     //   decoders declare Int; omitting satisfies both (defaults cover it).
+    // META-1: radio streams override the display title with the ICY song
+    //   ("Artist - Title" → split on the first " - "). Node title stays the album-ish
+    //   station identity; the now-playing rows show what is actually on air.
+    std::string disp_title = s.title, disp_artist = s.artist;
+    if (!s.icy_title.empty()) {
+        size_t sp = s.icy_title.find(" - ");
+        if (sp != std::string::npos && sp > 0) {
+            disp_artist = s.icy_title.substr(0, sp);
+            disp_title = s.icy_title.substr(sp + 3);
+        } else {
+            disp_title = s.icy_title;
+        }
+    }
     if (s.has_media) {
-        r["current_title"] = s.title;
-        r["title"] = s.title;
+        r["current_title"] = disp_title;
+        r["title"] = disp_title;
         if (!s.art_url.empty())
             r["art_url"] = s.art_url;
         // item_loop[0] = current song (parsePlayerStatus / asModelStatus build the
         //   now-playing item from it).
         nlohmann::json item;
         item["id"] = idx;
-        item["track"] = s.title.empty() ? "Live stream" : s.title;
-        item["title"] = s.title;
-        item["artist"] = s.artist.empty() ? "panicast" : s.artist;
+        item["track"] = disp_title.empty() ? "Live stream" : disp_title;
+        item["title"] = disp_title;
+        item["artist"] = disp_artist.empty() ? "panicast" : disp_artist;
         item["album"] = s.album.empty() ? "panicast" : s.album;
         item["duration"] = s.duration;
         if (!s.art_url.empty()) {

@@ -69,6 +69,14 @@ struct TreeNode {
     bool is_youtube = false;
     std::string channel_name;
     std::string subtext;
+    // META-1 (LMS-standard display metadata): structured artist/album/track so the
+    //   remote (Squeeze Client / web) shows real values instead of placeholders.
+    //   Filled by parsers (RSS itunes:*), persisted in tree_nodes (schema 51);
+    //   snapshot/status fall back to parent-title heuristics when empty.
+    std::string artist; // itunes:author / channel name
+    std::string album;  // podcast feed title / channel or collection name
+    int track_num = 0;  // itunes:episode (stored for future clients; not shown by
+                        //   Squeeze Client's current Item model)
     int duration = 0;
     bool is_cached = false;
     bool is_downloaded = false;
@@ -154,6 +162,8 @@ struct PlaylistItem {
     std::string url;
     int duration = 0;
     bool is_video = false;
+    std::string artist;    // META-1: carried to the remote playlist rows
+    std::string album;     // META-1
     std::string node_path; // Node path (SoftLink reference)
     TreeNodePtr node;      // F35: source tree node (so playback_node can track it for INFO title)
 };

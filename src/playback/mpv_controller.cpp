@@ -34,7 +34,7 @@ std::string MPVController::cli_ao_override_;
 
 MPVController::~MPVController() {
     running_ = false;
-    jam_running_.store(false); // D51: stop the watchdog; detached (a wedged engine is abandoned
+    jam_running_.store(false);  // D51: stop the watchdog; detached (a wedged engine is abandoned
     if (jam_thread_.joinable()) //   by design, so the dtor must not block on any join either)
         jam_thread_.detach();
     // Async: detach the event thread (don't join — could hang on WSLg VO teardown). ctx_ is left
@@ -60,7 +60,8 @@ bool MPVController::initialize() {
     cmd_done_ = false;
     cmd_thread_ = std::thread(&MPVController::cmd_loop_, this);
     jam_running_.store(true); // D51: engine-wedge watchdog (own thread — the only detector that
-    jam_thread_ = std::thread(&MPVController::jam_loop_, this); // survives a wedged worker/event loop)
+    jam_thread_ =
+        std::thread(&MPVController::jam_loop_, this); // survives a wedged worker/event loop)
     return true;
 }
 
@@ -185,7 +186,6 @@ bool MPVController::create_context_() {
     // Removed mpv_observe_property calls — event_loop doesn't handle
     //   PROPERTY_CHANGE events (all via update_state() polling); registering them is pure waste and
     //   pollutes the event queue; volume was also erroneously observed as INT64 (actually double).
-
 
     {
         std::lock_guard<std::mutex> lock(ctx_swap_mtx_);
@@ -370,22 +370,20 @@ int MPVController::jam_threshold_ms_() {
 void MPVController::jam_loop_() {
     const int threshold = jam_threshold_ms_();
     while (jam_running_.load()) {
-        std::this_thread::sleep_for(
-            std::chrono::milliseconds(std::max(500, threshold / 10)));
+        std::this_thread::sleep_for(std::chrono::milliseconds(std::max(500, threshold / 10)));
         if (!jam_running_.load() || jam_recovering_.load())
             continue;
         const auto now = std::chrono::steady_clock::now();
-        const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   now.time_since_epoch())
-                                   .count();
+        const int64_t now_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count();
         bool wedged = false;
         int64_t stuck_ms = 0;
         std::string where;
         {
             std::lock_guard<std::mutex> lock(cmd_mtx_);
             if (cmd_active_) {
-                stuck_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - cmd_start_)
-                               .count();
+                stuck_ms =
+                    std::chrono::duration_cast<std::chrono::milliseconds>(now - cmd_start_).count();
                 if (stuck_ms > threshold) {
                     wedged = true;
                     where = "worker:'" + cmd_label_ + "'";
@@ -421,7 +419,7 @@ void MPVController::recover_from_jam_(const std::string &where, int64_t stuck_ms
         old = ctx_;
         ctx_ = nullptr; // event loop parks; cmd worker drops new commands
     }
-    if (!old) {         // lost a race with stop()/another recovery — nothing to do
+    if (!old) { // lost a race with stop()/another recovery — nothing to do
         jam_recovering_.store(false);
         return;
     }
@@ -492,7 +490,7 @@ void MPVController::recover_from_jam_(const std::string &where, int64_t stuck_ms
 }
 
 void MPVController::event_loop() {
-    mpv_thread_done_.store(false); // reset for this run (for bounded join in stop())
+    mpv_thread_done_.store(false);           // reset for this run (for bounded join in stop())
     const uint32_t my_gen = evt_generation_; // D51: recovery replaces a wedged event loop
     while (running_) {
         if (my_gen != evt_generation_)
@@ -793,11 +791,10 @@ void MPVController::check_video_vo_() {
                     "audio only. Check [mpv] vo / display (WSLg: WAYLAND_DISPLAY, "
                     "XDG_RUNTIME_DIR)",
                     conf_vo.empty() ? "auto" : conf_vo));
-    EVENT_LOG(fmt::format(
-        "MPV: no video window (vo '{}' failed) — audio only; check [mpv] vo / display",
-        conf_vo.empty() ? "auto" : conf_vo));
+    EVENT_LOG(
+        fmt::format("MPV: no video window (vo '{}' failed) — audio only; check [mpv] vo / display",
+                    conf_vo.empty() ? "auto" : conf_vo));
 }
-
 
 // D41: END_FILE event handler (Extract Method from event_loop). Dispatches on mpv's
 //   end-file reason (0=EOF, 2=stop, 3=quit, 4=error, 5=redirect): logs a human-readable
@@ -809,8 +806,7 @@ void MPVController::handle_end_file_(mpv_event_end_file *ef) {
     // Y24.8: human-readable reason/error (was raw "reason: X, error: Y").
     //   mpv end-file reasons: 0=EOF, 2=stop, 3=quit, 4=error, 5=redirect.
     LOG(fmt::format("[MPV] End file: {}{}", end_file_reason_str(reason),
-                    reason == 4 ? fmt::format(" — {}", mpv_error_str(error_code))
-                                : ""));
+                    reason == 4 ? fmt::format(" — {}", mpv_error_str(error_code)) : ""));
     if (reason == 0) {
         EVENT_LOG("MPV: Track ended");
     } else if (reason == 4) {
@@ -880,11 +876,9 @@ void MPVController::handle_playback_error_(int error_code) {
         mpv_set_property_string(ctx_, "ytdl-format", "bestaudio/best");
         video_load_ = false; // D50: this load is now deliberately audio-only — the retry must
                              //   not re-trigger the PLAYBACK_RESTART vo notice above this message
-        const char *retry_cmd[] = {"loadfile", load_url.c_str(), "replace",
-                                   nullptr};
+        const char *retry_cmd[] = {"loadfile", load_url.c_str(), "replace", nullptr};
         int rc = mpv_command(ctx_, retry_cmd);
-        LOG(fmt::format("[MPV] VO-fallback retry loadfile result: {} ({})", rc,
-                        load_url));
+        LOG(fmt::format("[MPV] VO-fallback retry loadfile result: {} ({})", rc, load_url));
     }
     // -14 AO_INIT_FAILED: no code-side fallback (can't play sound without an AO).
     //   The human-readable message above tells the user to check [mpv] ao / PulseAudio / WSLg.
@@ -897,10 +891,9 @@ void MPVController::handle_playback_error_(int error_code) {
         // Y24.55: if playback had actually started (PLAYBACK_RESTART fired), this
         //   END_FILE r=4 is a mid-playback drop (#12) regardless of error code;
         //   otherwise it's a load/init failure (#1-4/#6/#8/#9/#10) by error code.
-        std::string iptv_msg = had_playback_started_
-                                   ? "IPTV: stream dropped mid-playback — source "
-                                     "interrupted; switch channel or retry"
-                                   : iptv_message_for_error_(error_code);
+        std::string iptv_msg = had_playback_started_ ? "IPTV: stream dropped mid-playback — source "
+                                                       "interrupted; switch channel or retry"
+                                                     : iptv_message_for_error_(error_code);
         if (!iptv_msg.empty())
             EVENT_LOG(iptv_msg);
     }
@@ -934,6 +927,10 @@ void MPVController::update_state() {
 
     char *t = nullptr;
     mpv_get_property(ctx_, "media-title", MPV_FORMAT_STRING, &t);
+
+    char *icy = nullptr;
+    mpv_get_property(ctx_, "metadata/by-key/icy-title", MPV_FORMAT_STRING,
+                     &icy); // META-1: radio now-playing
 
     int idle = 1;
     mpv_get_property(ctx_, "core-idle", MPV_FORMAT_FLAG, &idle);
@@ -1001,6 +998,12 @@ void MPVController::update_state() {
         state_.has_sub_track = sub_track;
         if (t)
             state_.title = t;
+        // META-1: radio ICY now-playing; clear when the stream stops sending it so a
+        //   stale song never outlives the track.
+        if (icy && *icy)
+            state_.icy_title = icy;
+        else
+            state_.icy_title.clear();
         if (path)
             state_.current_url = path;
         else if (state_.has_media == false)
@@ -1064,6 +1067,8 @@ void MPVController::update_state() {
         mpv_free(path);
     if (t)
         mpv_free(t);
+    if (icy)
+        mpv_free(icy);
     if (codec)
         mpv_free(codec);
     if (vcodec)

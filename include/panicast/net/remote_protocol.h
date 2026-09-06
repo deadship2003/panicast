@@ -18,6 +18,8 @@ struct RemotePlaylistItem {
     std::string title;
     int duration = 0;
     bool is_video = false;
+    std::string artist; // META-1: real values when the tree carries them
+    std::string album;  // META-1
 };
 
 // One row of the CURRENT mode's display list (the flat tree the TUI renders). Served to
@@ -63,8 +65,9 @@ struct RemoteStateSnapshot {
     // ART-2: display metadata for the remote's now-playing/playlist rows. The app
     //   renders "unknown artist/album" for BLANK fields — fill them with the source's
     //   name (parent feed/station/channel) and a mode context instead.
-    std::string artist;       // source name (feed / station / channel)
-    std::string album;        // "panicast · <MODE>"
+    std::string artist;       // structured artist w/ parent/channel fallbacks
+    std::string album;        // feed/collection title; "panicast · <MODE>" fallback
+    std::string icy_title;    // META-1: radio ICY "Artist - Title" (from mpv)
     int sleep_remaining = -1; // -1 = sleep timer inactive
     bool subtitle_active = false;
 };

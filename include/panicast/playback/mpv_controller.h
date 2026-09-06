@@ -89,6 +89,7 @@ public:
         double time_pos = 0.0;       // Current playback position
         double media_duration = 0.0; // Total media duration
         std::string title, current_url, audio_codec, video_codec;
+        std::string icy_title;  // META-1: stream "Artist - Title" (icy metadata, when present)
         bool has_video = false; // Whether a video track exists (detected at runtime)
         int playlist_pos = -1;  // Current playlist position (0-based)
         int playlist_count = 0; // Total playlist count
@@ -282,8 +283,8 @@ private:
     // D46: runtime IPTV diagnostics — off-air(#5)/audio-only(#7)/slow(#11) detection, extracted
     //   from update_state() into mpv_iptv.cpp. Inputs are the property-read snapshot (derived in
     //   update_state); mutates the per-track one-shot flags above. Runs on the event-loop thread.
-    void detect_iptv_states_(bool has_media_now, bool has_audio, bool has_video_track,
-                             bool idle, int64_t cache_speed, int64_t buf_pct, double buf_dur);
+    void detect_iptv_states_(bool has_media_now, bool has_audio, bool has_video_track, bool idle,
+                             int64_t cache_speed, int64_t buf_pct, double buf_dur);
     // D47: apply all [mpv]-section IniConfig options (vo/vid/ao/ytdl-format/keep-open/subtitle/
     //   slang/audio-display/tls/cache/user-agent) to ctx_ before mpv_initialize, with CLI
     //   overrides taking precedence. Impl in mpv_init.cpp; extracted verbatim from initialize().

@@ -71,8 +71,8 @@ void DatabaseManager::save_tree_node_recursive(const TreeNodePtr &node,
     const char *sql = "INSERT INTO tree_nodes (root_type, parent_id, title, url, type, expanded, "
                       "children_loaded, "
                       "is_youtube, has_subtitle, channel_name, is_cached, sort_order, art_url, "
-                      "subtext) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+                      "subtext, artist, album, track_num) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
         sqlite3_bind_text(stmt, 1, root_type.c_str(), -1, SQLITE_TRANSIENT);
@@ -251,7 +251,8 @@ void DatabaseManager::load_tree_node_recursive(const TreeNodePtr &parent,
                                                const std::string &root_type, int parent_id) {
     // Parameterized (no string interpolation)
     const char *sql = "SELECT id, title, url, type, expanded, children_loaded, is_youtube, "
-                      "has_subtitle, channel_name, is_cached, art_url, subtext "
+                      "has_subtitle, channel_name, is_cached, art_url, subtext, artist, album, "
+                      "track_num "
                       "FROM tree_nodes WHERE root_type=? AND parent_id=? ORDER BY sort_order;";
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) != SQLITE_OK)
@@ -276,6 +277,9 @@ void DatabaseManager::load_tree_node_recursive(const TreeNodePtr &parent,
         node->is_cached = sqlite3_column_int(stmt, 9) != 0;
         node->art_url = col(10); // ART-1: remote artwork (station logo / podcast cover)
         node->subtext = col(11); // ART-1: remote browse second line
+        node->artist = col(12);  // META-1: display metadata
+        node->album = col(13);   // META-1
+        node->track_num = sqlite3_column_int(stmt, 14); // META-1
         // F38 (#1): is_downloaded/local_file are NOT stored in tree_nodes (single source = media_cache).
         //   Left as default here; draw_line queries CacheManager::is_downloaded(url) live for coloring,
         //   so no information is lost. (Avoids a db-mtx → cache-mtx lock ordering inversion vs

@@ -34,6 +34,8 @@ int App::build_peer_list(TreeNodePtr node) {
         it.title = node->title;
         it.url = node->url;
         it.duration = node->duration;
+        it.artist = node->artist; // META-1
+        it.album = node->album;
         URLType ut = URLClassifier::classify(node->url);
         it.is_video = node->is_youtube || URLClassifier::is_video(ut);
         it.node = node;
@@ -49,6 +51,8 @@ int App::build_peer_list(TreeNodePtr node) {
             it.title = sib->title;
             it.url = sib->url;
             it.duration = sib->duration;
+            it.artist = sib->artist; // META-1
+            it.album = sib->album;
             URLType ut = URLClassifier::classify(sib->url);
             it.is_video = sib->is_youtube || URLClassifier::is_video(ut);
             it.node = sib;

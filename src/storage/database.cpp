@@ -100,7 +100,10 @@ bool DatabaseManager::init() {
     //   ART-1: SCHEMA_VERSION 49 -> 50. tree_nodes gains `art_url` + `subtext` columns so the
     //     remote (Squeeze Client) browse rows and now-playing artwork survive a restart.
     //     Idempotent ALTER TABLE ADD COLUMN below; tree data preserved.
-    constexpr int SCHEMA_VERSION = 50;
+    //   META-1: SCHEMA_VERSION 50 -> 51. tree_nodes gains artist/album/track_num —
+    //     structured LMS-standard display metadata for the remote (Squeeze Client)
+    //     rows and now-playing. Idempotent ALTER TABLE ADD COLUMN; tree data kept.
+    constexpr int SCHEMA_VERSION = 51;
     int stored_version = 0;
     {
         sqlite3_stmt *sv = nullptr;
@@ -149,6 +152,9 @@ bool DatabaseManager::init() {
             sort_order INTEGER DEFAULT 0,
             art_url TEXT,     -- ART-1: remote browse / now-playing artwork (station logo, podcast cover)
             subtext TEXT,     -- ART-1: second display line for the remote browse rows
+            artist TEXT,      -- META-1: LMS-standard display metadata
+            album TEXT,
+            track_num INTEGER DEFAULT 0,
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS progress (
@@ -448,6 +454,9 @@ bool DatabaseManager::init() {
     // ART-1 (49 -> 50): tree artwork + second-line text survive restarts.
     add_column_if_missing("tree_nodes", "art_url", "TEXT");
     add_column_if_missing("tree_nodes", "subtext", "TEXT");
+    add_column_if_missing("tree_nodes", "artist", "TEXT");                 // META-1 (51)
+    add_column_if_missing("tree_nodes", "album", "TEXT");                  // META-1 (51)
+    add_column_if_missing("tree_nodes", "track_num", "INTEGER DEFAULT 0"); // META-1 (51)
     add_column_if_missing("favourites", "is_youtube", "INTEGER DEFAULT 0");
     add_column_if_missing("favourites", "channel_name", "TEXT");
     add_column_if_missing("favourites", "source_type", "TEXT");
