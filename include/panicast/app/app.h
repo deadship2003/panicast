@@ -67,6 +67,7 @@
 #include "panicast/net/remote_command_bus.h"
 #include "panicast/net/remote_server.h"
 #include "panicast/net/remote_protocol.h"
+#include "panicast/net/bilibili_api.h"
 #include "panicast/storage/accounts.h"
 #include "panicast/ui/qr.h"
 #include "panicast/ui/icons.h"
@@ -78,8 +79,8 @@
 #include "panicast/storage/youtube_cache.h"
 #include "panicast/storage/persistence.h"
 #include "panicast/app/subtitle_service.h" // D10-1: subtitles/ASR Application Service (owns SubtitleManager + TranscriptionEngine)
-#include "panicast/app/search_service.h"   // D10-2: in-tree search Application Service (owns search state)
-#include "panicast/app/library_service.h"  // D10-4: library Application Service (owns per-mode tree data model)
+#include "panicast/app/search_service.h" // D10-2: in-tree search Application Service (owns search state)
+#include "panicast/app/library_service.h" // D10-4: library Application Service (owns per-mode tree data model)
 #include "panicast/app/download_service.h" // D43: download Application Service (owns download execution engine)
 #include "panicast/ui/border.h"
 #include "panicast/ui/ui.h"
@@ -115,7 +116,9 @@ public:
 
     // N09/S1: run `hook` right before the shutdown bookend's _exit(0) (which skips the
     //   rest of main) — the daemon uses it to remove its pid file.
-    void set_exit_hook(std::function<void()> hook) { exit_hook_ = std::move(hook); }
+    void set_exit_hook(std::function<void()> hook) {
+        exit_hook_ = std::move(hook);
+    }
 
     // Use std::cout instead of EVENT_LOG for command-line mode compatibility
     void import_feed(const std::string &url);
@@ -131,8 +134,9 @@ public:
 
 private:
     std::unique_ptr<IFrontend> frontend_ = std::make_unique<UI>();
-    bool headless_ = false;    // N09/S1: daemon mode — no draw/input, engine-only frame loop
-    std::function<void()> exit_hook_; // N09/S1: called just before _exit(0) in shutdown() // D12-3c: App owns the ncurses UI through the IFrontend contract (UI swappable — Qt could implement the same interface). Concrete UI is named only at this construction point + the static UI::is_input_cancelled input-marker check.
+    bool headless_ = false; // N09/S1: daemon mode — no draw/input, engine-only frame loop
+    std::function<void()>
+        exit_hook_; // N09/S1: called just before _exit(0) in shutdown() // D12-3c: App owns the ncurses UI through the IFrontend contract (UI swappable — Qt could implement the same interface). Concrete UI is named only at this construction point + the static UI::is_input_cancelled input-marker check.
     MPVController player;
     PlaybackService playback_{player}; // D8: first Application Service (owns playback Actions)
     // D10-4: the per-mode tree DATA MODEL (8 root item lists + 6 "loaded" flags) moved into
@@ -235,6 +239,13 @@ private:
     // META-4: query-taking core behind perform_online_search — also the remote
     //   (Squeezer input box) entry for O-mode searches.
     void run_online_search(const std::string &query);
+    // META-6: remote-admin surface (login flows + shared post-auth bodies).
+    //   start_remote_login returns the authorization URL immediately and finishes
+    //   on the pool; "tiktok" is a reserved slot (err="reserved").
+    bool start_remote_login(const std::string &mode, std::string &url_out, std::string &code_out,
+                            std::string &err_out);
+    void finish_google_login(const GoogleOAuth::TokenResult &tr);
+    void finish_bilibili_login(const BilibiliAPI::LoginResult &login);
     void perform_online_search_from_favourite();
     void load_search_history_children(TreeNodePtr node);
     // Y23.1: B/Y search-record cache (mirror O-mode online_root).
@@ -284,7 +295,8 @@ private:
     }
     // When the list is empty, size()-1 underflows to SIZE_MAX, casts to -1 as int, then out-of-bounds access
     void nav_bottom() {
-        library_.selected_idx() = library_.display_list().empty() ? 0 : (int)library_.display_list().size() - 1;
+        library_.selected_idx() =
+            library_.display_list().empty() ? 0 : (int)library_.display_list().size() - 1;
     }
     // Y24.54: jump to the currently playing node — switch to its mode, expand ancestors, select + scroll.
     void jump_to_playing();
@@ -349,8 +361,9 @@ private:
     //   and the post-loop teardown (persist state + _exit) are named for readability.
     void startup();
     void shutdown();
-    bool check_exit_requests(); // D40: SIGINT/termination/sleep-timer → sets running=false + returns true to break
-    void drain_frame_events();  // D40: per-frame remote/playback/state drain (UI thread)
+    bool
+    check_exit_requests(); // D40: SIGINT/termination/sleep-timer → sets running=false + returns true to break
+    void drain_frame_events(); // D40: per-frame remote/playback/state drain (UI thread)
     // D37: Extract Method — the per-frame tree-locked display-build phase of run()'s loop.
     bool build_frame_display();
     // D38: per-frame render context (Replace Method with Method Object — Fowler). The frame
@@ -367,7 +380,9 @@ private:
         std::vector<DownloadProgress> downloads;
     };
     FrameCtx prepare_frame(); // D38: state + derived AppState + selection/download snapshots
-    void draw_frame(const FrameCtx &f); // D39: per-frame draw under playlist_mutex_ (snapshot + dctx + frontend_->draw)
+    void draw_frame(
+        const FrameCtx
+            &f); // D39: per-frame draw under playlist_mutex_ (snapshot + dctx + frontend_->draw)
     // D11-3c: load_history_to_root relocated to LibraryService (the history_root_ owner).
     void load_persistent_data();
     void save_persistent_data();
@@ -483,6 +498,7 @@ private:
 
     // ── app_sync.cpp (Y01: YouTube sync, bidirectional) ─────────────────────────
     void sync_account_subscriptions(int account_id);
+
     void sync_account_history(int account_id);
     // Record a YouTube play (under the active account) into youtube_history (local side).
     void record_youtube_play(const std::string &video_id, const std::string &title,
@@ -561,5 +577,9 @@ private:
         return a > b;
     }
 };
+
+// app_bilibili.cpp, shared with app_remote_admin.cpp (META-6)
+int save_bilibili_account(const BilibiliAccount &a);
+void write_bilibili_cookies(const BilibiliAccount &a);
 
 } // namespace panicast

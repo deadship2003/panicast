@@ -3,6 +3,8 @@
 #include "panicast/net/lms_server.h"
 
 #include "panicast/config/ini_config.h"
+#include "panicast/net/bilibili_api.h"
+#include "panicast/net/google_oauth.h"
 #include "panicast/core/logger.h"
 #include "panicast/net/remote_command_bus.h"
 
@@ -1487,6 +1489,87 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         }
         // fall through: same page builder as `browse` below (fresh results)
         return json_slim_request(c, {"panicast", "browse", "root", "0", "200"});
+    } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "login") {
+        // META-6: start a mode login (youtube device-flow / bilibili QR / tiktok
+        //   reserved). Reply = a small page: tappable authorization link (weblink —
+        //   the browser opens it; the phone's Bilibili/Google app confirms), the
+        //   user code where applicable, and a status line. Completion lands on the
+        //   pool; the account tree refreshes and the list follows via browse_sig.
+        nlohmann::json r;
+        nlohmann::json loop = nlohmann::json::array();
+        std::string mode = cmd[2];
+        // The login runs on the UI thread via the bus; but we need the URL NOW —
+        //   request_device_code / request_qrcode are network calls, so they cannot
+        //   run inline. Perform them here (this IS a server thread, not the UI
+        //   thread) by calling the shared starters directly.
+        std::string url, code, err;
+        // The starters need App context only for the pool submit; the LMS server
+        //   reaches App via control_, so route through a dedicated action that
+        //   returns the URL synchronously is not possible — instead run the two
+        //   pure-API starters here and push only the FINISH via the bus.
+        if (mode == "youtube") {
+            auto dc = GoogleOAuth::request_device_code();
+            if (dc.ok) {
+                url = dc.verification_url;
+                code = dc.user_code;
+                // Finish on the pool via the bus (App handles poll + account add).
+                if (bus_)
+                    bus_->push({"_remote_login_youtube",
+                                {dc.device_code, std::to_string(dc.interval)},
+                                c.client_id});
+            } else {
+                err = dc.error.empty() ? "network error" : dc.error;
+            }
+        } else if (mode == "bilibili") {
+            auto qr = BilibiliAPI::request_qrcode();
+            if (qr.ok) {
+                url = qr.url;
+                if (bus_)
+                    bus_->push({"_remote_login_bilibili", {qr.qrcode_key}, c.client_id});
+            } else {
+                err = qr.error.empty() ? "network error" : qr.error;
+            }
+        } else if (mode == "tiktok") {
+            err = "reserved"; // per user decision: QR-only, adapter pending
+        } else {
+            err = "unknown mode";
+        }
+        if (!url.empty()) {
+            nlohmann::json link;
+            link["text"] = "🔓 打开授权页完成登录 / open to authorize";
+            link["weblink"] = url;
+            loop.push_back(link);
+            if (!code.empty()) {
+                nlohmann::json cr;
+                cr["text"] = "code: " + code;
+                loop.push_back(cr);
+            }
+            nlohmann::json st;
+            st["text"] = "等待授权…完成后账号树自动出现 / waiting for authorization…";
+            loop.push_back(st);
+        } else if (err == "reserved") {
+            nlohmann::json it;
+            it["text"] = "T 登录预留位:扫码适配中 / reserved: QR adapter pending";
+            loop.push_back(it);
+        } else {
+            nlohmann::json it;
+            it["text"] = "登录失败: " + err;
+            loop.push_back(it);
+        }
+        r["count"] = (int)loop.size();
+        r["offset"] = 0;
+        r["item_loop"] = loop;
+        return r;
+    } else if (k == "panicast" && cmd.size() > 2 && (cmd[1] == "fav" || cmd[1] == "unfav")) {
+        // META-6: favourites. "fav current" = the playing programme; "fav N" =
+        //   browse row N; "unfav N" = remove (F-mode long-press).
+        if (cmd[2] == "current")
+            push("fav_current");
+        else if (cmd[1] == "fav")
+            push_arg("fav_row", cmd[2]);
+        else
+            push_arg("unfav_row", cmd[2]);
+        return nlohmann::json::object();
     } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "handover") {
         // N10.5 zero-drop takeover: the TUI asks us to hand our listener + live phone
         //   connections to it (fds duplicated via SCM_RIGHTS; the phone never drops).
@@ -1603,8 +1686,13 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             //   search row included) lands exactly on the right data offset.
             if (window > 0 && from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
+                int virt = 0;
                 if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT")
-                    to = std::max(from, std::min(to, from + (size_t)window - 1));
+                    virt += 1; // search row
+                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK")
+                    virt += 1; // login row
+                if (virt > 0)
+                    to = std::max(from, std::min(to, from + (size_t)window - (size_t)virt));
             }
             // META-4: search input row at the very top of the MODE ROOT page for
             //   modes with a query-taking search. Tapping it opens the phone's text
@@ -1613,6 +1701,25 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             //   then shows the results.
             if (from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
+                // META-6: login entry at the top of account-bearing modes (before
+                //   the search row) — tappable, opens the authorization page.
+                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK") {
+                    static const std::map<std::string, std::pair<const char *, const char *>>
+                        logins = {
+                            {"ACCOUNT", {"youtube", "🔓 Login Google"}},
+                            {"BILIBILI", {"bilibili", "🔓 Login Bilibili (scan QR)"}},
+                            {"TIKTOK", {"tiktok", "🔓 Login Douyin (reserved)"}},
+                        };
+                    auto it = logins.find(m);
+                    if (it != logins.end()) {
+                        nlohmann::json go;
+                        go["cmd"] = nlohmann::json::array({"panicast", "login", it->second.first});
+                        nlohmann::json row;
+                        row["text"] = it->second.second;
+                        row["actions"] = nlohmann::json({{"go", go}});
+                        loop.push_back(row);
+                    }
+                }
                 if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT") {
                     nlohmann::json do_cmd =
                         nlohmann::json::array({"panicast", "search", "__INPUT__"});
@@ -1635,6 +1742,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     go["cmd"] = nlohmann::json::array({"panicast", "browse", "back"});
                 } else {
                     const auto &row = rows[not_root ? p - 1 : p];
+                    std::string row_idx = std::to_string(not_root ? p - 1 : p);
                     // Depth indent + branch marker: the flat mirror carries depth — show
                     //   it, or an expanded tree reads as one undifferentiated list.
                     std::string text(row.depth * 2, ' ');
@@ -1645,18 +1753,29 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     it["text"] = text;
                     if (!row.art_url.empty())
                         it["icon"] = row.art_url;
-                    go["cmd"] = nlohmann::json::array(
-                        {"panicast", "browse", std::to_string(not_root ? p - 1 : p)});
+                    go["cmd"] = nlohmann::json::array({"panicast", "browse", row_idx});
+                    // META-6 long-press menu: favourite everywhere, delete inside
+                    //   FAVOURITE mode (the tree IS the favourites list there).
+                    nlohmann::json more;
+                    if (control_ && control_->snapshot_state().mode == "FAVOURITE")
+                        more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
+                    else
+                        more["cmd"] = nlohmann::json::array({"panicast", "fav", row_idx});
+                    it["actions"] = nlohmann::json({{"go", go}, {"more", more}});
+                    loop.push_back(it);
+                    continue;
                 }
                 it["actions"] = nlohmann::json({{"go", go}});
                 loop.push_back(it);
             }
-            bool search_row = false;
+            bool search_row = false, login_row = false;
             if (from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
                 search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT";
+                login_row = m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK";
             }
-            r["count"] = (int)total + (search_row ? 1 : 0); // META-4 virtual row
+            r["count"] = (int)total + (search_row ? 1 : 0) +
+                         (login_row ? 1 : 0); // META-4/META-6 virtual rows
             r["offset"] = start > 0 ? start : 0;
             r["item_loop"] = loop;
             return r;

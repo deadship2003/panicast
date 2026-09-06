@@ -33,7 +33,7 @@ using json = nlohmann::json;
 // D11-3c: load_bilibili_accounts relocated to LibraryService (public — load_bilibili_root + the
 //   ops below call library_.load_bilibili_accounts()). The remaining static DB ops stay here.
 
-static int save_bilibili_account(const BilibiliAccount &a) {
+int save_bilibili_account(const BilibiliAccount &a) {
     // Y24.27: use DatabaseManager (was direct sqlite3_* — bypassed encapsulation).
     const Key32 mk = machine_key();
     BilibiliAccount enc = a;
@@ -49,7 +49,7 @@ static bool delete_bilibili_account(int id) {
 }
 
 // Write SESSDATA cookies to bilibili_cookie.txt (for yt-dlp --cookies).
-static void write_bilibili_cookies(const BilibiliAccount &a) {
+void write_bilibili_cookies(const BilibiliAccount &a) {
     std::string path = IniConfig::instance().get_bilibili_cookies_file();
     if (path.empty())
         return;

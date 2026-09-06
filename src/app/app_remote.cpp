@@ -14,6 +14,10 @@
 //     add_node/delete remain TUI-only (context-dependent inline flows).
 #include "panicast/app/app.h"
 
+#include "panicast/net/bilibili_api.h"
+#include "panicast/net/google_oauth.h"
+#include "panicast/storage/database.h"
+
 #include "panicast/core/constants.h"
 #include "panicast/core/event_log.h"
 #include "panicast/core/logger.h"
@@ -708,6 +712,108 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
     if (a == "asr_stop") {
         subtitle_.transcription_engine().stop_realtime();
         EVENT_LOG("Remote: ASR stop");
+        return;
+    }
+
+    // ── META-6: remote login finishers (the URL half ran on the LMS thread) ──
+    if (a == "_remote_login_youtube") {
+        // args: [device_code, interval]
+        if (args.size() >= 1) {
+            std::string device_code = args[0];
+            int interval = args.size() > 1 ? std::atoi(args[1].c_str()) : 5;
+            if (interval < 1)
+                interval = 5;
+            GoogleOAuth::TokenResult dc_hold; // unused; captured below via lambda values
+            (void)dc_hold;
+            pool_.submit([this, device_code, interval]() {
+                auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(900);
+                int iv = interval;
+                while (std::chrono::steady_clock::now() < deadline) {
+                    std::this_thread::sleep_for(std::chrono::seconds(iv));
+                    auto tr = GoogleOAuth::poll_token(device_code);
+                    if (tr.ok) {
+                        EVENT_LOG("Y: remote login authorized; syncing...");
+                        finish_google_login(tr);
+                        return;
+                    }
+                    if (tr.error == "slow_down")
+                        iv += 5;
+                    else if (tr.error != "authorization_pending") {
+                        LOG(fmt::format("[Y] remote token poll error: {}", tr.error));
+                        return;
+                    }
+                }
+                LOG("[Y] remote login timed out");
+            });
+            EVENT_LOG("Remote: Y login started (device flow)");
+        }
+        return;
+    }
+    if (a == "_remote_login_bilibili") {
+        if (!args.empty()) {
+            std::string key = args[0];
+            pool_.submit([this, key]() {
+                for (int i = 0; i < 180; ++i) {
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    auto login = BilibiliAPI::poll_qrcode(key);
+                    if (login.ok) {
+                        finish_bilibili_login(login);
+                        return;
+                    }
+                    if (login.code != 86101 && login.code != 86090 && !login.error.empty()) {
+                        LOG(fmt::format("[B] remote poll error: {}", login.error));
+                        return;
+                    }
+                }
+                LOG("[B] remote login timed out");
+            });
+            EVENT_LOG("Remote: B login started (QR)");
+        }
+        return;
+    }
+    // ── META-6: favourites by row / current / unfav ──
+    if (a == "fav_row") {
+        int idx = std::atoi(arg0().c_str());
+        int n = static_cast<int>(library_.display_list().size());
+        if (idx >= 0 && idx < n) {
+            library_.selected_idx() = idx;
+            add_favourite();
+            EVENT_LOG(fmt::format("Remote: favourite row {}", idx));
+        }
+        return;
+    }
+    if (a == "fav_current") {
+        if (TreeNodePtr pn = playback_.playback_node()) {
+            std::string src_mode = mode_str(mode);
+            DatabaseManager::instance().save_favourite(
+                pn->title, pn->url, (int)pn->type, pn->is_youtube, pn->channel_name, src_mode,
+                pn->is_link, pn->link_target_url, false, pn->art_url, pn->artist, pn->album);
+            EVENT_LOG(fmt::format("Remote: ★ favourite current: {}", pn->title));
+        } else {
+            EVENT_LOG("Remote: favourite current — nothing playing");
+        }
+        return;
+    }
+    if (a == "unfav_row") {
+        int idx = std::atoi(arg0().c_str());
+        int n = static_cast<int>(library_.display_list().size());
+        if (idx >= 0 && idx < n) {
+            auto node = library_.display_list()[idx].node;
+            library_.selected_idx() = idx;
+            if (node && !node->url.empty()) {
+                DatabaseManager::instance().delete_favourite(node->url);
+                {
+                    std::lock_guard<std::recursive_mutex> lock(library_.tree_mutex());
+                    auto &root = library_.fav_root();
+                    for (size_t i = 0; i < root.size(); ++i)
+                        if (root[i] == node) {
+                            root.erase(root.begin() + (long)i);
+                            break;
+                        }
+                }
+                EVENT_LOG(fmt::format("Remote: unfavourite {}", node->title));
+            }
+        }
         return;
     }
 

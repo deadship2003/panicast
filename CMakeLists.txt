@@ -280,6 +280,7 @@ add_library(panicast_engine OBJECT
     # panicast: renamed binary output (target stays 'panicast' internally)
         src/core/paths.cpp
     src/app/cli_commands.cpp
+    src/app/app_remote_admin.cpp
     src/app/client_tui.cpp
     src/app/daemon_mode.cpp
     src/core/logger.cpp
