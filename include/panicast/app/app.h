@@ -232,6 +232,9 @@ private:
 
     // ── app_search.cpp ─────────────────────────────────────────────────────────
     void perform_online_search();
+    // META-4: query-taking core behind perform_online_search — also the remote
+    //   (Squeezer input box) entry for O-mode searches.
+    void run_online_search(const std::string &query);
     void perform_online_search_from_favourite();
     void load_search_history_children(TreeNodePtr node);
     // Y23.1: B/Y search-record cache (mirror O-mode online_root).

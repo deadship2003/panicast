@@ -14,13 +14,7 @@ using json = nlohmann::json;
 // Online mode search
 // Search history node management
 // Supports ESC to cancel search
-void App::perform_online_search() {
-    std::string query = frontend_->input_box("Search iTunes Podcasts");
-    // Check whether the user cancelled
-    if (UI::is_input_cancelled(query)) {
-        EVENT_LOG("Search cancelled");
-        return;
-    }
+void App::run_online_search(const std::string &query) {
     if (query.empty())
         return;
 
@@ -39,6 +33,16 @@ void App::perform_online_search() {
     library_.view_start() = 0;
 
     EVENT_LOG(fmt::format("Found {} podcasts", results.size()));
+}
+
+void App::perform_online_search() {
+    std::string query = frontend_->input_box("Search iTunes Podcasts");
+    // Check whether the user cancelled
+    if (UI::is_input_cancelled(query)) {
+        EVENT_LOG("Search cancelled");
+        return;
+    }
+    run_online_search(query); // META-4: shared core (also the remote-search entry)
 }
 
 // Perform an online search from the FAVOURITE-mode online_root LINK node

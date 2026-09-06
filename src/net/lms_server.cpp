@@ -1433,6 +1433,30 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
+    } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "search") {
+        // META-4: search submitted from the phone's input box. Runs the current
+        //   mode's query search on the UI thread, waits (bounded) for the mirrored
+        //   list to update, then answers with the refreshed page.
+        if (control_) {
+            std::string before_sig = control_->snapshot_state().browse_sig;
+            push_arg("search_query", cmd[2]);
+            std::string prev = before_sig;
+            int still = 0;
+            for (int i = 0; i < 200 && running_.load(); ++i) { // ≤10s: network search
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                std::string cur = control_->snapshot_state().browse_sig;
+                if (cur != before_sig) {
+                    still = cur == prev ? still + 1 : 0;
+                    prev = cur;
+                    if (still >= 6)
+                        break;
+                } else {
+                    prev = cur;
+                }
+            }
+        }
+        // fall through: same page builder as `browse` below (fresh results)
+        return json_slim_request(c, {"panicast", "browse", "root", "0", "200"});
     } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "handover") {
         // N10.5 zero-drop takeover: the TUI asks us to hand our listener + live phone
         //   connections to it (fds duplicated via SCM_RIGHTS; the phone never drops).
@@ -1544,6 +1568,35 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             to = total;
             if (window > 0)
                 to = std::min(to, from + (size_t)window);
+            // META-4: the first page carries the virtual search row — shrink the data
+            //   window by one so the NEXT page request (client counts every item,
+            //   search row included) lands exactly on the right data offset.
+            if (window > 0 && from == 0 && control_) {
+                std::string m = control_->snapshot_state().mode;
+                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT")
+                    to = std::max(from, std::min(to, from + (size_t)window - 1));
+            }
+            // META-4: search input row at the very top of the MODE ROOT page for
+            //   modes with a query-taking search. Tapping it opens the phone's text
+            //   input; submitting executes `panicast search <query>` (__INPUT__ is
+            //   replaced client-side), which runs the search and this refreshed page
+            //   then shows the results.
+            if (from == 0 && control_) {
+                std::string m = control_->snapshot_state().mode;
+                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT") {
+                    nlohmann::json do_cmd =
+                        nlohmann::json::array({"panicast", "search", "__INPUT__"});
+                    nlohmann::json row;
+                    row["text"] = "🔍 Search…";
+                    nlohmann::json inp;
+                    inp["len"] = 200;
+                    inp["initialText"] = "";
+                    inp["_inputStyle"] = "text";
+                    row["input"] = inp;
+                    row["actions"] = nlohmann::json({{"do", {{"cmd", do_cmd}}}});
+                    loop.push_back(row);
+                }
+            }
             for (size_t p = from; p < to; ++p) {
                 nlohmann::json it;
                 nlohmann::json go;
@@ -1568,7 +1621,12 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 it["actions"] = nlohmann::json({{"go", go}});
                 loop.push_back(it);
             }
-            r["count"] = (int)total;
+            bool search_row = false;
+            if (from == 0 && control_) {
+                std::string m = control_->snapshot_state().mode;
+                search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT";
+            }
+            r["count"] = (int)total + (search_row ? 1 : 0); // META-4 virtual row
             r["offset"] = start > 0 ? start : 0;
             r["item_loop"] = loop;
             return r;

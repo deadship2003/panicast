@@ -595,6 +595,22 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
         return;
     }
 
+    // ── Search with a query (META-4: Squeezer's input box submits here) ──
+    if (a == "search_query") {
+        std::string q = arg0();
+        if (!q.empty()) {
+            if (mode == AppMode::ONLINE)
+                run_online_search(q);
+            else if (mode == AppMode::BILIBILI)
+                perform_bilibili_search(q);
+            else if (mode == AppMode::ACCOUNT)
+                perform_youtube_search(q);
+            else
+                EVENT_LOG("Remote: search_query unsupported in this mode");
+            library_.selected_idx() = 0; // results land at the top
+        }
+        return;
+    }
     // ── Search (mode-appropriate; opens the input box on the host, replicating '/') ──
     if (a == "search") {
         if (mode == AppMode::ONLINE)
