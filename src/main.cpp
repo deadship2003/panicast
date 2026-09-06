@@ -31,9 +31,11 @@ static void print_usage() {
     std::cout << "By " << panicast::AUTHOR << " <" << panicast::EMAIL << "> @"
               << panicast::BUILD_TIME << "\n\n";
     std::cout << "Usage:\n";
-    std::cout << "  panicast                  Start the application (TUI mode; first run\n";
-    std::cout << "                            auto-installs the user-space background\n";
-    std::cout << "                            service — sudo-free, see `panicast status`)\n";
+    std::cout << "  panicast                  TUI: client controller when the background\n";
+    std::cout << "                            service is running (it stays untouched);\n";
+    std::cout << "                            standalone engine TUI otherwise\n";
+    std::cout << "  panicast --full           Force the FULL engine TUI (takes over the\n";
+    std::cout << "                            running service; hands it back on exit)\n";
     std::cout << "  panicast start|stop|restart|enable|disable   Manage the background\n";
     std::cout << "                            service (user systemd unit; no sudo needed)\n";
     std::cout << "  panicast status           Service + playback status\n";
@@ -111,21 +113,19 @@ int main(int argc, char *argv[]) {
     /* CLI long options: --purge, --quiet, --vid, --vo, --ao, --help, --version.
        (--daemon stays as an INTERNAL long option: the user service unit's ExecStart
        uses it — nobody types it. The -d short form is gone per N10.3.) */
-    static struct option long_options[] = {{"daemon", no_argument, 0, 'd'},
-                                           {"purge", no_argument, 0, 'P'},
-                                           {"quiet", no_argument, 0, 'q'},
-                                           {"vid", required_argument, 0, 'V'},
-                                           {"vo", required_argument, 0, 'O'},
-                                           {"ao", required_argument, 0, 'A'},
-                                           {"help", no_argument, 0, 'h'},
-                                           {"version", no_argument, 0, 'v'},
-                                           {0, 0, 0, 0}};
+    static struct option long_options[] = {
+        {"daemon", no_argument, 0, 'd'},    {"full", no_argument, 0, 'F'},
+        {"purge", no_argument, 0, 'P'},     {"quiet", no_argument, 0, 'q'},
+        {"vid", required_argument, 0, 'V'}, {"vo", required_argument, 0, 'O'},
+        {"ao", required_argument, 0, 'A'},  {"help", no_argument, 0, 'h'},
+        {"version", no_argument, 0, 'v'},   {0, 0, 0, 0}};
 
     std::string cli_vo, cli_vid, cli_ao; /* CLI overrides (empty = use defaults) */
-    bool daemon_mode = false; /* --daemon (internal): headless daemon for the service unit */
+    bool daemon_mode = false;    /* --daemon (internal): headless daemon for the service unit */
+    bool force_full_tui = false; /* --full: engine TUI even when the service runs */
 
     int option_index = 0;
-    while ((opt = getopt_long(argc, argv, "a:i:e:t:h?v", long_options, &option_index)) != -1) {
+    while ((opt = getopt_long(argc, argv, "a:i:e:t:Fh?v", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'd': // internal (--daemon only; reached from the systemd unit's ExecStart)
             daemon_mode = true;
@@ -154,6 +154,10 @@ int main(int argc, char *argv[]) {
             return 0;
         case 'P':
             purge = true;
+            break;
+        case 'F': /* --full: force the standalone engine TUI (takeover) even when
+                       the background service is running */
+            force_full_tui = true;
             break;
         case 'q': /* --quiet: pure audio mode */
             quiet_mode = true;
@@ -275,7 +279,7 @@ int main(int argc, char *argv[]) {
         //   opens a local CLIENT TUI over its control plane — the service process
         //   is not touched at all (no takeover, no restart, phone keeps streaming).
         //   The standalone engine TUI (below) only boots when nothing is running.
-        if (panicast::daemon_pid_alive()) {
+        if (panicast::daemon_pid_alive() && !force_full_tui) {
             return panicast::run_client_tui();
         }
         // N10.3: FIRST-RUN AUTO-SERVICE — install/refresh the user-space unit before

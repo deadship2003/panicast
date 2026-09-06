@@ -98,9 +98,10 @@ struct LmsClient {
         std::string body = "[{\"channel\":\"/slim/request\",\"data\":{\"response\":\"/ctui\","
                            "\"request\":" +
                            inner.dump() + "},\"id\":\"1\"}]";
-        std::string req = "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " +
-                          b64 + "\r\nContent-Type: text/json\r\nContent-Length: " +
-                          std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body;
+        std::string req =
+            "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " + b64 +
+            "\r\nContent-Type: text/json\r\nContent-Length: " + std::to_string(body.size()) +
+            "\r\nConnection: close\r\n\r\n" + body;
         if (::send(fd, req.data(), req.size(), MSG_NOSIGNAL) <= 0) {
             ::close(fd);
             return nlohmann::json::object();
@@ -128,20 +129,20 @@ struct LmsClient {
 
 // ── view state ────────────────────────────────────────────────────────────────
 struct Row {
-    std::string text;  // already depth-indented, branches carry "▸ "
+    std::string text; // already depth-indented, branches carry "▸ "
     bool branch = false;
 };
 
 struct ClientState {
     LmsClient lms;
     std::vector<Row> rows;
-    std::string browse_sig;   // daemon-side list signature ("" until first fetch)
-    std::string last_sig_seen;// sig as of the last rows fetch
+    std::string browse_sig;    // daemon-side list signature ("" until first fetch)
+    std::string last_sig_seen; // sig as of the last rows fetch
     // now-playing footer (from `status - 1`)
     std::string mode = "?", play_state = "stop", title, artist;
     double pos = 0, dur = 0;
     int volume = 0, queue_count = 0, queue_idx = -1;
-    bool queue_view = false;  // Tab toggles tree ↔ queue
+    bool queue_view = false; // Tab toggles tree ↔ queue
     std::vector<Row> queue_rows;
 };
 
@@ -176,9 +177,10 @@ void fetch_status(ClientState &st) {
     st.volume = s.value("mixer volume", 0);
     st.queue_count = s.value("playlist_tracks", 0);
     st.queue_idx = s.value("playlist_cur_index", -1);
-    const auto &item = s.contains("item_loop") && s["item_loop"].is_array() && !s["item_loop"].empty()
-                           ? s["item_loop"][0]
-                           : nlohmann::json::object();
+    const auto &item =
+        s.contains("item_loop") && s["item_loop"].is_array() && !s["item_loop"].empty()
+            ? s["item_loop"][0]
+            : nlohmann::json::object();
     st.title = item.value("track", std::string());
     st.artist = item.value("artist", std::string());
     st.browse_sig = s.value("browse_sig", st.browse_sig);
@@ -239,8 +241,8 @@ int run_client_tui() {
         fetch_status(st);
         fetch_rows(st);
         std::printf("mode=%s state=%s vol=%d queue=%d rows=%zu sig=%s\n",
-                    fetch_mode_label(st).c_str(), st.play_state.c_str(), st.volume,
-                    st.queue_count, st.rows.size(), st.browse_sig.substr(0, 12).c_str());
+                    fetch_mode_label(st).c_str(), st.play_state.c_str(), st.volume, st.queue_count,
+                    st.rows.size(), st.browse_sig.substr(0, 12).c_str());
         return 0;
     }
 
@@ -268,7 +270,8 @@ int run_client_tui() {
         erase();
         // header: mode + view + play state
         attron(A_REVERSE);
-        std::string head = " panicast · " + mode_label + (st.queue_view ? " · Queue" : " · List");
+        std::string head =
+            " panicast·client · " + mode_label + (st.queue_view ? " · Queue" : " · List");
         mvaddnstr(0, 0, head.c_str(), cols_n - 1);
         for (int x = (int)head.size(); x < cols_n; ++x)
             addch(' ');
@@ -308,6 +311,7 @@ int run_client_tui() {
         mvaddnstr(rows_n - 2, 0, np.c_str(), cols_n - 1);
         attroff(A_REVERSE);
         mvaddnstr(rows_n - 1, 0, HELP, cols_n - 1);
+        mvaddstr(rows_n - 1, std::max(0, cols_n - 32), "client mode · --full = engine TUI");
         refresh();
 
         // input / poll tick
@@ -396,9 +400,9 @@ int run_client_tui() {
             break;
         default:
             if (ch >= '1' && ch <= '9') {
-                static const char *modes[] = {"RADIO",    "PODCAST", "FAVOURITE", "HISTORY",
-                                              "ONLINE",   "ACCOUNT", "BILIBILI",  "TIKTOK",
-                                              "IPTV"};
+                static const char *modes[] = {"RADIO",    "PODCAST", "FAVOURITE",
+                                              "HISTORY",  "ONLINE",  "ACCOUNT",
+                                              "BILIBILI", "TIKTOK",  "IPTV"};
                 const char *want = modes[ch - '1'];
                 activate({"panicast", "mode", want, "0", "400"});
                 mode_label = fetch_mode_label(st);
