@@ -83,6 +83,9 @@ static TreeNodePtr parse_douyin_user_videos(const std::string &url, const std::s
             ep->url = v.playUrl; // CDN direct link (Referer injected at playback, see mpv_play.cpp)
             ep->title = v.desc.empty() ? v.awemeId : v.desc;
             ep->duration = v.duration;
+            ep->art_url = v.coverUrl;   // META-3: aweme cover (already parsed)
+            ep->artist = result->title; // META-3: creator = artist
+            ep->album = "TikTok";       // META-3: platform context
             ep->children_loaded = true;
             ep->parent = result;
             result->children.push_back(ep);

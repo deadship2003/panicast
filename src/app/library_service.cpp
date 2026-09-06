@@ -15,15 +15,15 @@
 
 #include <fmt/format.h>
 
-#include "panicast/core/crypto.h"        // D11-3c: token_open/token_seal/machine_key/Key32 (load_bilibili_accounts)
-#include "panicast/core/event_log.h"     // EVENT_LOG (load_radio_root)
-#include "panicast/core/logger.h"        // LOG (load_bilibili_accounts)
-#include "panicast/net/network.h"        // Network::fetch (load_radio_root)
-#include "panicast/net/url_classifier.h" // URLClassifier (load_history_to_root)
-#include "panicast/parsers/opml_parser.h"// OPMLParser (load_radio_root)
-#include "panicast/storage/accounts.h"   // AccountsManager (load_accounts_root)
-#include "panicast/storage/database.h"   // DatabaseManager + BilibiliAccount/TiktokAccount
-#include "panicast/storage/persistence.h"// Persistence::save_cache (load_radio_root)
+#include "panicast/core/crypto.h" // D11-3c: token_open/token_seal/machine_key/Key32 (load_bilibili_accounts)
+#include "panicast/core/event_log.h"      // EVENT_LOG (load_radio_root)
+#include "panicast/core/logger.h"         // LOG (load_bilibili_accounts)
+#include "panicast/net/network.h"         // Network::fetch (load_radio_root)
+#include "panicast/net/url_classifier.h"  // URLClassifier (load_history_to_root)
+#include "panicast/parsers/opml_parser.h" // OPMLParser (load_radio_root)
+#include "panicast/storage/accounts.h"    // AccountsManager (load_accounts_root)
+#include "panicast/storage/database.h"    // DatabaseManager + BilibiliAccount/TiktokAccount
+#include "panicast/storage/persistence.h" // Persistence::save_cache (load_radio_root)
 
 namespace panicast
 {
@@ -31,8 +31,8 @@ namespace panicast
 // ── Shared node-construction helper (relocated from App::make_search_history_child) ──
 //   Y23.2: shared "Search History" container child — used by both Y (load_accounts_root) and
 //   B (expand_bilibili_account) so the container shape is identical. Pure node construction.
-TreeNodePtr LibraryService::make_search_history_child(TreeNodePtr account_node, const std::string &source,
-                                                      int account_id) {
+TreeNodePtr LibraryService::make_search_history_child(TreeNodePtr account_node,
+                                                      const std::string &source, int account_id) {
     auto shist = std::make_shared<TreeNode>();
     shist->title = "Search History";
     shist->type = NodeType::FOLDER;
@@ -256,7 +256,7 @@ void LibraryService::load_history_to_root() {
     std::lock_guard<std::recursive_mutex> lock(tree_mutex_);
     history_root_.clear();
 
-    for (const auto &[url, title, timestamp, mt] : history) {
+    for (const auto &[url, title, timestamp, mt, h_artist, h_album, h_art] : history) {
         auto node = std::make_shared<TreeNode>();
         node->title = title.empty() ? "Unknown" : title;
         node->url = url;

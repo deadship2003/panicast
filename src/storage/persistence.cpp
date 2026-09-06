@@ -96,7 +96,7 @@ void Persistence::load_data(std::vector<TreeNodePtr> &podcasts, std::vector<Tree
     // Favourites (F38: link/local-folder metadata as columns, no data_json)
     auto db_favs = db.load_favourites();
     for (const auto &[title, url, type, is_youtube, channel_name, source_type, is_link,
-                      link_target_url, is_local_folder, mt] : db_favs) {
+                      link_target_url, is_local_folder, mt, art_url, artist, album] : db_favs) {
         auto node = std::make_shared<TreeNode>();
         node->title = title;
         node->url = url;
@@ -111,6 +111,9 @@ void Persistence::load_data(std::vector<TreeNodePtr> &podcasts, std::vector<Tree
         node->is_link = is_link;
         node->link_target_url = link_target_url;
         node->is_local_folder = is_local_folder;
+        node->art_url = art_url; // META-3: thumbnails survive restarts
+        node->artist = artist;
+        node->album = album;
         node->children_loaded = true;
         if (is_local_folder) {
             node->source_mode = "LOCAL_FOLDER";

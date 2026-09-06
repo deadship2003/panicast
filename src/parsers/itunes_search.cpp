@@ -122,6 +122,12 @@ TreeNodePtr ITunesSearch::parse_result(const json &item) {
     node->url = get_str("feedUrl");
     if (node->url.empty())
         return nullptr; // Skip items without a feed URL
+    // META-3: iTunes carries full display metadata — use it (art gets the 600px variant).
+    node->art_url = get_str("artworkUrl600");
+    if (node->art_url.empty())
+        node->art_url = get_str("artworkUrl100");
+    node->artist = get_str("artistName");
+    node->album = name; // a podcast feed's "album" is the show itself (META-1 semantics)
 
     // Add subtext to display more information
     std::string subtext;
@@ -176,7 +182,7 @@ std::string ITunesSearch::fetch(const std::string &url) {
         });
     curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response);
     curl_easy_setopt(curl, CURLOPT_USERAGENT, USER_AGENT); // Unified browser UA
-    apply_network_proxy(curl, url, "podcast");                             // [network] proxy
+    apply_network_proxy(curl, url, "podcast");             // [network] proxy
     curl_easy_setopt(curl, CURLOPT_TIMEOUT, 10L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, 15L);

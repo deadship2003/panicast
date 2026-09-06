@@ -127,7 +127,8 @@ void App::add_feed() {
 
 // Subscribe to a podcast from Online search results
 void App::subscribe_online_podcast() {
-    if (library_.selected_idx() < 0 || library_.selected_idx() >= (int)library_.display_list().size())
+    if (library_.selected_idx() < 0 ||
+        library_.selected_idx() >= (int)library_.display_list().size())
         return;
     auto node = library_.display_list()[library_.selected_idx()].node;
     if (!node || node->url.empty())
@@ -335,7 +336,8 @@ void App::add_favourites_batch(int marked_count) {
 
         DatabaseManager::instance().save_favourite(
             fn->title, fn->url, (int)fn->type, fn->is_youtube, fn->channel_name, source_type,
-            fn->is_link, fn->link_target_url, fn->is_local_folder);
+            fn->is_link, fn->link_target_url, fn->is_local_folder, fn->art_url, fn->artist,
+            fn->album); // META-3
 
         EVENT_LOG("★ Favourite: Online Search (LINK to online_root)");
         return;
@@ -464,7 +466,8 @@ void App::add_favourites_batch(int marked_count) {
 // Extended favourite feature, supports all node types (including folders)
 // ONLINE mode distinguishes two favourite types, with bidirectional sync
 void App::add_favourite() {
-    if (library_.selected_idx() < 0 || library_.selected_idx() >= (int)library_.display_list().size())
+    if (library_.selected_idx() < 0 ||
+        library_.selected_idx() >= (int)library_.display_list().size())
         return;
     auto node = library_.display_list()[library_.selected_idx()].node;
     if (!node)
@@ -553,7 +556,8 @@ void App::add_favourite() {
     fn->is_link = true; // F38: link flag persisted as a column (was in data_json)
     DatabaseManager::instance().save_favourite(fn->title, fn->url, (int)fn->type, fn->is_youtube,
                                                fn->channel_name, source_mode_name, fn->is_link,
-                                               fn->link_target_url, fn->is_local_folder);
+                                               fn->link_target_url, fn->is_local_folder,
+                                               fn->art_url, fn->artist, fn->album); // META-3
 
     EVENT_LOG(fmt::format("★ Favourite LINK: {} [{}]", node->title, source_mode_name));
 }

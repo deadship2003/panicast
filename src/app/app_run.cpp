@@ -317,7 +317,7 @@ void App::draw_frame(const FrameCtx &f) {
         cached_hist_url = cur_url_snap;
         cached_hist_titles.clear();
         auto hist = DatabaseManager::instance().get_history(8);
-        for (auto &[u, t, ts, mt] : hist) {
+        for (auto &[u, t, ts, mt, h_a, h_al, h_art] : hist) { // META-3 tail unused here
             if (!cur_url_snap.empty() && u == cur_url_snap)
                 continue;
             cached_hist_titles.push_back(t);

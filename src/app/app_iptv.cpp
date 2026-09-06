@@ -72,6 +72,9 @@ static TreeNodePtr make_channel_node(const IptvChannel &c) {
     n->type = NodeType::PODCAST_EPISODE; // playable leaf; play() routes the stream URL via mpv
     n->is_iptv_channel = true;           // N04: render with the 📺 TV icon
     n->children_loaded = true;           // leaf — no children
+    n->art_url = c.logo;                 // META-3: tvg-logo channel icon
+    n->artist = c.group.empty() ? "IPTV" : c.group; // META-3: group = artist context
+    n->album = c.group.empty() ? "IPTV" : c.group;  // META-3
     return n;
 }
 

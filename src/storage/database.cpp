@@ -103,7 +103,9 @@ bool DatabaseManager::init() {
     //   META-1: SCHEMA_VERSION 50 -> 51. tree_nodes gains artist/album/track_num —
     //     structured LMS-standard display metadata for the remote (Squeeze Client)
     //     rows and now-playing. Idempotent ALTER TABLE ADD COLUMN; tree data kept.
-    constexpr int SCHEMA_VERSION = 51;
+    //   META-3: SCHEMA_VERSION 51 -> 52. favourites + history gain art_url/artist/album
+    //     so F/H rows keep thumbnails and display metadata across restarts.
+    constexpr int SCHEMA_VERSION = 52;
     int stored_version = 0;
     {
         sqlite3_stmt *sv = nullptr;
@@ -457,6 +459,12 @@ bool DatabaseManager::init() {
     add_column_if_missing("tree_nodes", "artist", "TEXT");                 // META-1 (51)
     add_column_if_missing("tree_nodes", "album", "TEXT");                  // META-1 (51)
     add_column_if_missing("tree_nodes", "track_num", "INTEGER DEFAULT 0"); // META-1 (51)
+    add_column_if_missing("favourites", "art_url", "TEXT");               // META-3 (52)
+    add_column_if_missing("favourites", "artist", "TEXT");                // META-3 (52)
+    add_column_if_missing("favourites", "album", "TEXT");                 // META-3 (52)
+    add_column_if_missing("history", "art_url", "TEXT");                  // META-3 (52)
+    add_column_if_missing("history", "artist", "TEXT");                   // META-3 (52)
+    add_column_if_missing("history", "album", "TEXT");                    // META-3 (52)
     add_column_if_missing("favourites", "is_youtube", "INTEGER DEFAULT 0");
     add_column_if_missing("favourites", "channel_name", "TEXT");
     add_column_if_missing("favourites", "source_type", "TEXT");

@@ -70,8 +70,13 @@ public:
     std::pair<double, bool> get_progress(const std::string &url);
 
     // History records
-    void add_history(const std::string &url, const std::string &title, int duration);
-    std::vector<std::tuple<std::string, std::string, std::string, int>> get_history(int limit = 50);
+    void add_history(const std::string &url, const std::string &title, int duration,
+                     const std::string &artist = "", const std::string &album = "",
+                     const std::string &art_url = ""); // META-3
+    // tuple: url, title, timestamp, media_type, artist, album, art_url (META-3 tail)
+    std::vector<std::tuple<std::string, std::string, std::string, int, std::string,
+                           std::string, std::string>>
+    get_history(int limit = 50);
 
     // ── Unified tree (tree_nodes table, recursive parent_id, root_type discriminator) ──
     // F38: replaces the old nodes (nested-JSON children) + radio_cache (recursive) tables.
@@ -117,10 +122,13 @@ public:
     void save_favourite(const std::string &title, const std::string &url, int type,
                         bool is_youtube = false, const std::string &channel_name = "",
                         const std::string &source_type = "", bool is_link = false,
-                        const std::string &link_target_url = "", bool is_local_folder = false);
-    // tuple: title, url, type, is_youtube, channel_name, source_type, is_link, link_target_url, is_local_folder, media_type
+                        const std::string &link_target_url = "", bool is_local_folder = false,
+                        const std::string &art_url = "", const std::string &artist = "",
+                        const std::string &album = ""); // META-3
+    // tuple: title,url,type,is_youtube,channel_name,source_type,is_link,link_target_url,
+    //   is_local_folder,media_type,art_url,artist,album (META-3 tail)
     std::vector<std::tuple<std::string, std::string, int, bool, std::string, std::string, bool,
-                           std::string, bool, int>>
+                           std::string, bool, int, std::string, std::string, std::string>>
     load_favourites();
     void delete_favourite(const std::string &url);
 

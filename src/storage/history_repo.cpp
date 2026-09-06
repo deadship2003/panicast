@@ -106,7 +106,9 @@ std::pair<double, bool> DatabaseManager::get_progress(const std::string &url) {
 }
 
 // History
-void DatabaseManager::add_history(const std::string &url, const std::string &title, int duration) {
+void DatabaseManager::add_history(const std::string &url, const std::string &title, int duration,
+                                  const std::string &artist, const std::string &album,
+                                  const std::string &art_url) {
     if (!is_ready())
         return;
     std::lock_guard<std::recursive_mutex> lock(mtx_);
@@ -130,15 +132,19 @@ void DatabaseManager::add_history(const std::string &url, const std::string &tit
     }
 }
 
-std::vector<std::tuple<std::string, std::string, std::string, int>>
+std::vector<
+    std::tuple<std::string, std::string, std::string, int, std::string, std::string, std::string>>
 DatabaseManager::get_history(int limit) {
     if (!is_ready())
         return {};
     std::lock_guard<std::recursive_mutex> lock(mtx_);
-    std::vector<std::tuple<std::string, std::string, std::string, int>> result;
-    // Parameterized LIMIT (no string interpolation). N05: also fetch media_type.
+    std::vector<std::tuple<std::string, std::string, std::string, int, std::string, std::string,
+                           std::string>>
+        result;
+    // Parameterized LIMIT (no string interpolation). N05: media_type; META-3: display meta.
     const char *sql =
-        "SELECT url, title, timestamp, media_type FROM history ORDER BY timestamp DESC LIMIT ?;";
+        "SELECT url, title, timestamp, media_type, artist, album, art_url FROM history "
+        "ORDER BY timestamp DESC LIMIT ?;";
 
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -150,7 +156,8 @@ DatabaseManager::get_history(int limit) {
                 const unsigned char *t = sqlite3_column_text(stmt, i);
                 return t ? reinterpret_cast<const char *>(t) : "";
             };
-            result.push_back({col(0), col(1), col(2), sqlite3_column_int(stmt, 3)});
+            result.push_back({col(0), col(1), col(2), sqlite3_column_int(stmt, 3), col(4), col(5),
+                              col(6)}); // META-3
         }
         sqlite3_finalize(stmt);
     }

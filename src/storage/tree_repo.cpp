@@ -163,7 +163,9 @@ void DatabaseManager::clear_media_cache() {
 void DatabaseManager::save_favourite(const std::string &title, const std::string &url, int type,
                                      bool is_youtube, const std::string &channel_name,
                                      const std::string &source_type, bool is_link,
-                                     const std::string &link_target_url, bool is_local_folder) {
+                                     const std::string &link_target_url, bool is_local_folder,
+                                     const std::string &art_url, const std::string &artist,
+                                     const std::string &album) {
     if (!is_ready())
         return;
     std::lock_guard<std::recursive_mutex> lock(mtx_);
@@ -171,8 +173,9 @@ void DatabaseManager::save_favourite(const std::string &title, const std::string
     // N06: also persist media_type (display category) computed from url.
     const char *sql = "INSERT OR REPLACE INTO favourites (title, url, type, is_youtube, "
                       "channel_name, source_type, "
-                      "is_link, link_target_url, is_local_folder, media_type) "
-                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+                      "is_link, link_target_url, is_local_folder, media_type, art_url, artist, "
+                      "album) "
+                      "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
     int mt = static_cast<int>(URLClassifier::classifyMediaType(url));
     sqlite3_stmt *stmt = nullptr;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -186,6 +189,9 @@ void DatabaseManager::save_favourite(const std::string &title, const std::string
         sqlite3_bind_text(stmt, 8, link_target_url.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_bind_int(stmt, 9, is_local_folder ? 1 : 0);
         sqlite3_bind_int(stmt, 10, mt);
+        sqlite3_bind_text(stmt, 11, art_url.c_str(), -1, SQLITE_TRANSIENT); // META-3
+        sqlite3_bind_text(stmt, 12, artist.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_text(stmt, 13, album.c_str(), -1, SQLITE_TRANSIENT);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
     }
@@ -193,10 +199,10 @@ void DatabaseManager::save_favourite(const std::string &title, const std::string
 
 // Favourites management - load all favourites
 std::vector<std::tuple<std::string, std::string, int, bool, std::string, std::string, bool,
-                       std::string, bool, int>>
+                       std::string, bool, int, std::string, std::string, std::string>>
 DatabaseManager::load_favourites() {
     std::vector<std::tuple<std::string, std::string, int, bool, std::string, std::string, bool,
-                           std::string, bool, int>>
+                           std::string, bool, int, std::string, std::string, std::string>>
         favs;
     if (!is_ready())
         return favs;
@@ -204,7 +210,8 @@ DatabaseManager::load_favourites() {
 
     const char *sql =
         "SELECT title, url, type, is_youtube, channel_name, source_type, is_link, link_target_url, "
-        "is_local_folder, media_type FROM favourites ORDER BY created_at DESC;";
+        "is_local_folder, media_type, art_url, artist, album FROM favourites "
+        "ORDER BY created_at DESC;";
 
     sqlite3_stmt *stmt;
     if (sqlite3_prepare_v2(db_, sql, -1, &stmt, nullptr) == SQLITE_OK) {
@@ -216,7 +223,8 @@ DatabaseManager::load_favourites() {
             favs.push_back({col(0), col(1), sqlite3_column_int(stmt, 2),
                             sqlite3_column_int(stmt, 3) != 0, col(4), col(5),
                             sqlite3_column_int(stmt, 6) != 0, col(7),
-                            sqlite3_column_int(stmt, 8) != 0, sqlite3_column_int(stmt, 9)});
+                            sqlite3_column_int(stmt, 8) != 0, sqlite3_column_int(stmt, 9), col(10),
+                            col(11), col(12)}); // META-3
         }
         sqlite3_finalize(stmt);
     }

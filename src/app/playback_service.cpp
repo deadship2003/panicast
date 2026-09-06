@@ -710,7 +710,15 @@ void PlaybackService::record_play_history(const std::string &url, const std::str
                                           int duration) {
     if (url.empty())
         return;
-    DatabaseManager::instance().add_history(url, title, duration);
+    // META-3: carry display metadata from the playback node so history rows keep
+    //   thumbnails and artist/album in the remote browse + now-playing.
+    std::string h_artist, h_album, h_art;
+    if (TreeNodePtr pn = playback_node_) {
+        h_artist = pn->artist;
+        h_album = pn->album.empty() ? pn->channel_name : pn->album;
+        h_art = pn->art_url;
+    }
+    DatabaseManager::instance().add_history(url, title, duration, h_artist, h_album, h_art);
     // Y24.26: rebuild history tree async (was sync — caused UI stutter on every track switch).
     //   D9: notify via the bus — App's HistoryChanged subscriber calls load_history_to_root().
     pool_->submit([this]() { EventBus::instance().publish(HistoryChanged{}); });

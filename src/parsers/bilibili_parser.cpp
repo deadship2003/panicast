@@ -23,13 +23,17 @@ TreeNodePtr BilibiliParser::parse_user_videos(const std::string &sessdata, const
         return feed;
 
     auto videos = BilibiliAPI::fetch_user_videos(sessdata, mid);
+    int vt = 0;
     for (const auto &v : videos) {
         auto ep = std::make_shared<TreeNode>();
         ep->type = NodeType::PODCAST_EPISODE;
         ep->url = v.url;
         ep->title = v.title;
         ep->duration = v.duration;
-        ep->art_url = v.pic; // cover URL (stored, not rendered in TUI)
+        ep->art_url = v.pic;      // cover URL (stored, not rendered in TUI)
+        ep->artist = feed->title; // META-3: creator = artist
+        ep->album = "Bilibili";   // META-3: platform context
+        ep->track_num = ++vt;     // META-3
         ep->children_loaded = true;
         ep->parent = feed;
         feed->children.push_back(ep);
