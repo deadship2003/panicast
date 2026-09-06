@@ -1703,7 +1703,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 int virt = 0;
                 if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK")
                     virt += 1; // search row
-                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK")
+                if (m == "ACCOUNT")
                     virt += 1; // login row
                 if (virt > 0)
                     to = std::max(from, std::min(to, from + (size_t)window - (size_t)virt));
@@ -1717,12 +1717,10 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 std::string m = control_->snapshot_state().mode;
                 // META-6: login entry at the top of account-bearing modes (before
                 //   the search row) — tappable, opens the authorization page.
-                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK") {
+                if (m == "ACCOUNT") { // Y only — B/T login stays in the TUI ('a' key)
                     static const std::map<std::string, std::pair<const char *, const char *>>
                         logins = {
                             {"ACCOUNT", {"youtube", "🔓 Login Google"}},
-                            {"BILIBILI", {"bilibili", "🔓 Login Bilibili (scan QR)"}},
-                            {"TIKTOK", {"tiktok", "🔓 Login Douyin (scan QR)"}},
                         };
                     auto it = logins.find(m);
                     if (it != logins.end()) {
@@ -1786,7 +1784,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             if (from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
                 search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK";
-                login_row = m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK";
+                login_row = m == "ACCOUNT";
             }
             r["count"] = (int)total + (search_row ? 1 : 0) +
                          (login_row ? 1 : 0); // META-4/META-6 virtual rows

@@ -244,14 +244,6 @@ int run_daemon() {
                      "Exit it (check `panicast status` / running terminals) and try again.\n");
         return 1;
     }
-    // META-7a: WSLg audio — the systemd user service does NOT inherit shell
-    //   profile env (PULSE_SERVER is set by WSLg's /etc/profile.d only in
-    //   interactive shells). Without it, mpv's pulse driver can't find the
-    //   server and AO=null (silent playback). Set it if WSLg is present and
-    //   not already set. On native Linux this is a no-op.
-    if (::access("/mnt/wslg/PulseServer", F_OK) == 0 && !std::getenv("PULSE_SERVER"))
-        ::setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer", 0);
-
     // Same boot sequence as the TUI main (minus the terminal save — no terminal here).
     Paths::migrate_legacy();
     curl_global_init(CURL_GLOBAL_ALL);

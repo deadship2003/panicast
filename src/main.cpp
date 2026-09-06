@@ -208,10 +208,6 @@ int main(int argc, char *argv[]) {
         return 0;
     }
 
-    // META-7a: WSLg audio env for the systemd service context (see daemon_mode.cpp)
-    if (::access("/mnt/wslg/PulseServer", F_OK) == 0 && !std::getenv("PULSE_SERVER"))
-        ::setenv("PULSE_SERVER", "unix:/mnt/wslg/PulseServer", 0);
-
     curl_global_init(CURL_GLOBAL_ALL);
     xmlInitParser();
 
