@@ -199,7 +199,8 @@ void App::perform_search() {
         //   cursor are tree state), then hands the algorithm the roots + cursor. collect_context_
         //   matches fills search_matches_ + sets total_matches_ (order + dedup unchanged).
         std::lock_guard<std::recursive_mutex> lock(library_.tree_mutex());
-        TreeNodePtr cur_node = (library_.selected_idx() >= 0 && library_.selected_idx() < (int)library_.display_list().size())
+        TreeNodePtr cur_node = (library_.selected_idx() >= 0 &&
+                                library_.selected_idx() < (int)library_.display_list().size())
                                    ? library_.display_list()[library_.selected_idx()].node
                                    : nullptr;
         search_.collect_context_matches(cur_items(), cur_node, ql);
@@ -276,6 +277,8 @@ TreeNodePtr App::build_search_result_node(const std::string &source, const json 
         c->is_youtube = true;
         c->title = r.value("title", "Untitled");
         c->channel_name = r.value("channel_title", "");
+        c->artist = c->channel_name; // META-2: channel = artist
+        c->album = "YouTube";        // META-2: platform context
         if (!c->channel_name.empty() && kind != "channel")
             c->subtext = c->channel_name;
         if (kind == "channel") {

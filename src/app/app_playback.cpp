@@ -80,6 +80,8 @@ int App::build_peer_list(TreeNodePtr node) {
                     pi.title = it->title;
                     pi.url = it->url;
                     pi.duration = it->duration;
+                    pi.artist = it->artist; // META-1
+                    pi.album = it->album;
                     URLType ut = URLClassifier::classify(it->url);
                     pi.is_video = it->is_youtube || URLClassifier::is_video(ut);
                     pi.node = it;

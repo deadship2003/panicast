@@ -235,6 +235,7 @@ TreeNodePtr App::parse_feed_by_type(TreeNodePtr node, const std::string &url, UR
                 result->type = NodeType::PODCAST_FEED;
                 result->title = cache.channel_name;
                 result->channel_name = cache.channel_name;
+                int vt = 0;
                 for (const auto &v : cache.videos) {
                     auto ep = std::make_shared<TreeNode>();
                     ep->type = NodeType::PODCAST_EPISODE;
@@ -242,6 +243,10 @@ TreeNodePtr App::parse_feed_by_type(TreeNodePtr node, const std::string &url, UR
                     ep->url = v.url;
                     ep->is_youtube = true;
                     ep->art_url = v.thumbnail; // ART-2
+                    ep->artist =
+                        cache.channel_name.empty() ? result->title : cache.channel_name; // META-2
+                    ep->album = "YouTube";                                               // META-2
+                    ep->track_num = ++vt;
                     ep->children_loaded = true;
                     ep->parent = result;
                     result->children.push_back(ep);
@@ -395,8 +400,22 @@ void App::commit_feed_result(TreeNodePtr node, TreeNodePtr result, const std::st
                 node->subtext = result->subtext;
             if (has_children) {
                 node->children = result->children;
-                for (auto &c : node->children)
+                int vt = 0;
+                for (auto &c : node->children) {
                     c->parent = node; // BUG1: reset parent (result was a temporary)
+                    // META-2: YouTube channel/playlist feeds — display metadata for the
+                    //   remote rows (live-parse children get it here; cache-path nodes
+                    //   already carry it and are skipped by the emptiness guards).
+                    if (c->is_youtube || node->is_youtube) {
+                        if (c->artist.empty())
+                            c->artist =
+                                node->channel_name.empty() ? node->title : node->channel_name;
+                        if (c->album.empty())
+                            c->album = "YouTube";
+                        if (c->track_num == 0)
+                            c->track_num = ++vt;
+                    }
+                }
                 node->children_loaded = true;
                 node->expanded = true; // auto-expand to show the loaded content
                 node->parse_failed = false;

@@ -270,6 +270,7 @@ void App::enter_account_node(TreeNodePtr node) {
                     if (!cached.videos.empty()) {
                         std::lock_guard<std::recursive_mutex> lock(library_.tree_mutex());
                         n->children.clear();
+                        int vt = 0;
                         for (const auto &v : cached.videos) {
                             auto ep = std::make_shared<TreeNode>();
                             ep->type = NodeType::PODCAST_EPISODE;
@@ -277,6 +278,9 @@ void App::enter_account_node(TreeNodePtr node) {
                             ep->url = v.url;
                             ep->is_youtube = true;
                             ep->art_url = v.thumbnail; // ART-2
+                            ep->artist = n->title;     // META-2: channel = artist
+                            ep->album = "YouTube";     // META-2: platform context
+                            ep->track_num = ++vt;
                             ep->children_loaded = true;
                             ep->parent = n;
                             n->children.push_back(ep);
@@ -328,6 +332,7 @@ void App::enter_account_node(TreeNodePtr node) {
                     if (cnt > 0) {
                         // OAuth path returns a vector (build nodes here); yt-dlp path already built into n->children.
                         if (n->children.empty() && !vids.empty()) {
+                            int vt = 0;
                             for (const auto &v : vids) {
                                 auto ep = std::make_shared<TreeNode>();
                                 ep->type = NodeType::PODCAST_EPISODE;
@@ -335,6 +340,9 @@ void App::enter_account_node(TreeNodePtr node) {
                                 ep->url = v.url;
                                 ep->is_youtube = true;
                                 ep->art_url = v.thumbnail; // ART-2
+                                ep->artist = n->title;     // META-2
+                                ep->album = "YouTube";     // META-2
+                                ep->track_num = ++vt;
                                 ep->children_loaded = true;
                                 ep->parent = n;
                                 n->children.push_back(ep);
@@ -342,9 +350,18 @@ void App::enter_account_node(TreeNodePtr node) {
                         }
                         n->children_loaded = true;
                         n->expanded = true;
+                        int yt = 0;
                         for (auto &c : n->children) {
                             c->is_youtube = true;
                             c->parent = n;
+                            // META-2: yt-dlp path (children built by the parser) — fill
+                            //   display metadata post-hoc when absent.
+                            if (c->artist.empty())
+                                c->artist = n->title;
+                            if (c->album.empty())
+                                c->album = "YouTube";
+                            if (c->track_num == 0)
+                                c->track_num = ++yt;
                         }
                         // ART-2: the channel row itself gets the first video's thumbnail
                         //   when nothing better is on the node (avatar needs an extra API
