@@ -30,7 +30,8 @@
 namespace panicast
 {
 
-namespace {
+namespace
+{
 // stream-fix (2026-08-16): per-session map of episode source URL → resolved CDN URL. Every hit is
 //   re-validated with a 1-byte GET before use (signed CDN URLs expire; a stale entry re-resolves
 //   the chain), so the TTL only bounds memory, not correctness. One entry per distinct episode
@@ -234,10 +235,11 @@ void PlaybackService::on_playback_ended(int reason, AppMode mode, PlayMode play_
     //   the same way current_index_ is; the TreeNode is retained by the tree, so the shared_ptr
     //   reassignment is safe in practice (matches existing pattern).
     TreeNodePtr next_node = current_playlist_[next].node;
-    playback_node_ = next_node;   // D9-2: authoritative track state (queried via playback_node())
+    playback_node_ = next_node; // D9-2: authoritative track state (queried via playback_node())
     playback_mode_ = mode;
-    bool has_video = current_playlist_[next].is_video; // snapshot under the lock (event + play below)
-    now_playing_is_video_ = has_video;                 // D14-2: per-track is_video for now_playing()
+    bool has_video =
+        current_playlist_[next].is_video; // snapshot under the lock (event + play below)
+    now_playing_is_video_ = has_video;    // D14-2: per-track is_video for now_playing()
     // D9 + D10-3 Step 2: publish the track change WITH its re-identified has_video flag. SubtitleService
     //   subscribes → begin_track(next_node, has_video): auto-advance now runs the SAME full A/B branch
     //   as a manual play (Option B — was a Method-B-only load_transcript). Dispatch is synchronous on
@@ -347,9 +349,8 @@ std::string PlaybackService::resolve_stream_url_(const std::string &orig_url) {
         {
             std::lock_guard<std::mutex> lock(resolve_cache_mtx);
             auto it = resolve_cache.find(orig_url);
-            if (it != resolve_cache.end() &&
-                std::chrono::steady_clock::now() - it->second.second <
-                    std::chrono::minutes(RESOLVE_CACHE_TTL_MIN))
+            if (it != resolve_cache.end() && std::chrono::steady_clock::now() - it->second.second <
+                                                 std::chrono::minutes(RESOLVE_CACHE_TTL_MIN))
                 cached = it->second.first;
         }
         if (!cached.empty()) { // no lock held across the network probe
@@ -386,16 +387,16 @@ std::string PlaybackService::resolve_stream_url_(const std::string &orig_url) {
     if (final_url == orig_url)
         LOG(fmt::format("[PLAY] no redirect chain ({}ms): {}", ms(), host_of(orig_url)));
     else
-        LOG(fmt::format("[PLAY] redirect chain resolved ({}ms): {} -> {}", ms(),
-                        host_of(orig_url), host_of(final_url)));
+        LOG(fmt::format("[PLAY] redirect chain resolved ({}ms): {} -> {}", ms(), host_of(orig_url),
+                        host_of(final_url)));
     return final_url;
 }
 
 //   items, so yt-dlp returns an audio-only stream URL → the video stream is never downloaded
 //   (saves bandwidth). Played via play_video with vo=null (no window) so sub_file (lyrics) still
 //   loads. For direct muxed URLs (non-YouTube) this can't apply — see mpv/container limitation.
-std::vector<std::string>
-PlaybackService::resolve_youtube_url(const std::string &url, bool has_video) const {
+std::vector<std::string> PlaybackService::resolve_youtube_url(const std::string &url,
+                                                              bool has_video) const {
     std::vector<std::string> base_args = YouTubeChannelParser::ytdlp_youtube_args();
     bool audio_only = MPVController::is_audio_only_mode();
     bool want_video = has_video && !audio_only;
@@ -438,9 +439,30 @@ PlaybackService::resolve_youtube_url(const std::string &url, bool has_video) con
             LOG(fmt::format(
                 "[YouTube] resolve attempt {}/{} failed (launched={}, exit={}, timeout={}s)",
                 attempt, attempts, result.launched, result.exit_code, timeout_sec));
+            // META-2: yt-dlp's own error is the diagnosis — a fast exit=1 is a solver/
+            //   config problem (e.g. missing yt_dlp_ejs on 2026.07+), NOT slowness.
+            //   Surface its last stderr line so the log says why, not just "failed".
+            std::string tail;
+            {
+                std::istringstream es(result.stderr_output);
+                std::string l;
+                while (std::getline(es, l)) {
+                    while (!l.empty() && (l.back() == '\r' || l.back() == ' '))
+                        l.pop_back();
+                    if (!l.empty())
+                        tail = l; // keep the last non-empty line
+                }
+            }
+            if (!tail.empty())
+                LOG(fmt::format("[YouTube] yt-dlp: {}", tail.substr(0, 300)));
+            static bool ejs_hinted = false;
+            if (!ejs_hinted && result.stderr_output.find("ejs") != std::string::npos) {
+                ejs_hinted = true;
+                EVENT_LOG("YouTube nsig solver missing: pip install -U \"yt-dlp[default]\" "
+                          "(or pip install yt-dlp-ejs) — every resolve fails fast without it");
+            }
             if (attempt < attempts)
-                EVENT_LOG(fmt::format("YouTube resolve retry {}/{} (nsig/proxy can be slow)...",
-                                      attempt, attempts));
+                EVENT_LOG(fmt::format("YouTube resolve retry {}/{}...", attempt, attempts));
         }
     }
     // Y11: fetch soft subtitle (.vtt) when [youtube] sub_lang is set; append its path as urls[2].
@@ -530,7 +552,8 @@ Media PlaybackService::now_playing() const {
 // Play a single item by index (pointer-driven model).
 // F23: YouTube URLs resolved async in pool_ (non-blocking); local/non-YouTube play immediately.
 void PlaybackService::play_current(int idx, AppMode mode, PlayMode play_mode) {
-    EventBus::instance().publish(PlaybackTrackEnded{}); // D11-1: previous track superseded → SubtitleService stop_realtime (realtime ASR must not carry across tracks)
+    EventBus::instance().publish(
+        PlaybackTrackEnded{}); // D11-1: previous track superseded → SubtitleService stop_realtime (realtime ASR must not carry across tracks)
     std::string orig_url;
     bool has_video = false;
     std::string title; // P1-4: snapshot under the lock; lambdas capture by value
@@ -555,7 +578,7 @@ void PlaybackService::play_current(int idx, AppMode mode, PlayMode play_mode) {
     //   resolves the stream async — the TITLE is the node title, known immediately). Previously
     //   playback_node was always reset to nullptr, so INFO Title fell back to mpv media-title
     //   (stream URL/ICY for radio, not the station name).
-    playback_node_ = pn;           // D9-2: authoritative track state (queried via playback_node())
+    playback_node_ = pn; // D9-2: authoritative track state (queried via playback_node())
     playback_mode_ = mode;
     now_playing_is_video_ = has_video; // D14-2: per-track is_video for now_playing()
     // D9 + D10-3 Step 2: publish the track change WITH its has_video flag. SubtitleService subscribes
@@ -572,7 +595,8 @@ void PlaybackService::play_current(int idx, AppMode mode, PlayMode play_mode) {
     // Y23.9: BUFFERING state — set pending before play; cleared when mpv reports has_media.
     // Y24.17: timestamp each step so panicast.log shows WHERE the wait goes (sync fs::exists/DB vs
     //   mpv load). >5s on a local file is abnormal — this pinpoints it.
-    set_buffering_(true); // Y23.9: BUFFERING state — set pending before play; cleared when mpv reports has_media
+    set_buffering_(
+        true); // Y23.9: BUFFERING state — set pending before play; cleared when mpv reports has_media
     auto play_t0 = std::chrono::steady_clock::now();
     auto ms_since = [&]() {
         return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -592,12 +616,12 @@ void PlaybackService::play_current(int idx, AppMode mode, PlayMode play_mode) {
     URLType ut = URLClassifier::classify(orig_url);
 
     if (!local_url.empty()) {
-        auto [saved_pos, completed] = DatabaseManager::instance().get_progress(orig_url); // D14-4: key on source URL (not played cache path)
+        auto [saved_pos, completed] = DatabaseManager::instance().get_progress(
+            orig_url); // D14-4: key on source URL (not played cache path)
         // ASR-fix (2026-08-15): RADIO_STREAM classification also folds in direct podcast .mp3 URLs
         //   (extension-based) — resume those too when the item carries a finite duration (RSS
         //   enclosure). True live streams have duration==0 and stay non-resumable.
-        if (saved_pos > 5.0 && !completed &&
-            (ut != URLType::RADIO_STREAM || duration > 0)) {
+        if (saved_pos > 5.0 && !completed && (ut != URLType::RADIO_STREAM || duration > 0)) {
             player_.set_resume_position(local_url, saved_pos);
             EVENT_LOG(fmt::format("Resume from {:02d}:{:02d}", static_cast<int>(saved_pos) / 60,
                                   static_cast<int>(saved_pos) % 60));
