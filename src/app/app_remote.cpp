@@ -15,6 +15,7 @@
 #include "panicast/app/app.h"
 
 #include "panicast/net/bilibili_api.h"
+#include "panicast/net/douyin_api.h"
 #include "panicast/net/google_oauth.h"
 #include "panicast/storage/database.h"
 
@@ -768,6 +769,38 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
                 LOG("[B] remote login timed out");
             });
             EVENT_LOG("Remote: B login started (QR)");
+        }
+        return;
+    }
+    if (a == "_remote_login_tiktok") {
+        if (!args.empty()) {
+            std::string token = args[0];
+            pool_.submit([this, token]() {
+                // The cookie jar (douyin_cookie.txt) was pre-seeded by
+                //   request_qrcode's bootstrap; poll_qrcode appends sessionid on
+                //   success. T tree then reloads from the cookie file.
+                auto api = std::make_unique<DouyinApi>();
+                for (int i = 0; i < 180; ++i) { // 1s × 3min
+                    std::this_thread::sleep_for(std::chrono::seconds(1));
+                    auto r = api->poll_qrcode(token);
+                    if (r.ok) {
+                        EVENT_LOG("T: Douyin login OK (sessionid obtained); reloading…");
+                        library_.load_tiktok_root();
+                        return;
+                    }
+                    if (!r.err.empty()) {
+                        LOG(fmt::format("[T] douyin poll: {}", r.err));
+                        return;
+                    }
+                    // code 1=waiting 2=scanned — keep polling; anything else stops.
+                    if (r.code != 1 && r.code != 2 && r.code != 0) {
+                        LOG(fmt::format("[T] douyin poll status {}", r.code));
+                        return;
+                    }
+                }
+                LOG("[T] douyin login timed out");
+            });
+            EVENT_LOG("Remote: T login started (Douyin QR)");
         }
         return;
     }

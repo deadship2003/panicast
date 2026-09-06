@@ -4,6 +4,7 @@
 
 #include "panicast/config/ini_config.h"
 #include "panicast/net/bilibili_api.h"
+#include "panicast/net/douyin_api.h"
 #include "panicast/net/google_oauth.h"
 #include "panicast/core/logger.h"
 #include "panicast/net/remote_command_bus.h"
@@ -1530,7 +1531,18 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 err = qr.error.empty() ? "network error" : qr.error;
             }
         } else if (mode == "tiktok") {
-            err = "reserved"; // per user decision: QR-only, adapter pending
+            // META-6c: Douyin QR login (sso.douyin.com, no X-Bogus). The QR
+            //   content is the scannable URL — served as the weblink so the phone
+            //   browser opens it; the app confirms. Cookie jar writes sessionid.
+            DouyinApi dy;
+            auto qr = dy.request_qrcode();
+            if (qr.ok && !qr.qr_content.empty()) {
+                url = qr.qr_content;
+                if (bus_)
+                    bus_->push({"_remote_login_tiktok", {qr.token}, c.client_id});
+            } else {
+                err = qr.err.empty() ? "QR request failed (CN network needed?)" : qr.err;
+            }
         } else {
             err = "unknown mode";
         }
@@ -1547,10 +1559,6 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             nlohmann::json st;
             st["text"] = "等待授权…完成后账号树自动出现 / waiting for authorization…";
             loop.push_back(st);
-        } else if (err == "reserved") {
-            nlohmann::json it;
-            it["text"] = "T 登录预留位:扫码适配中 / reserved: QR adapter pending";
-            loop.push_back(it);
         } else {
             nlohmann::json it;
             it["text"] = "登录失败: " + err;
@@ -1708,7 +1716,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                         logins = {
                             {"ACCOUNT", {"youtube", "🔓 Login Google"}},
                             {"BILIBILI", {"bilibili", "🔓 Login Bilibili (scan QR)"}},
-                            {"TIKTOK", {"tiktok", "🔓 Login Douyin (reserved)"}},
+                            {"TIKTOK", {"tiktok", "🔓 Login Douyin (scan QR)"}},
                         };
                     auto it = logins.find(m);
                     if (it != logins.end()) {

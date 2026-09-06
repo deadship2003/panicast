@@ -296,6 +296,9 @@ int main(int argc, char *argv[]) {
         //   against both a running service AND a TUI-hosted engine). The full
         //   engine TUI only boots when NOTHING owns the engine, or with --full
         //   (which then takes over via the N10.5 zero-drop handover).
+        (void)force_client_tui; // --client is the DEFAULT whenever an engine owner
+                                //   exists (N10.8); the flag stays accepted for
+                                //   explicitness / script stability.
         if (!force_full_tui && (panicast::daemon_pid_alive() || panicast::tui_pid_alive())) {
             return panicast::run_client_tui();
         }
