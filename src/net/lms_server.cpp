@@ -1132,8 +1132,14 @@ nlohmann::json LmsServer::status_data(int start, int window) {
             it["id"] = (int)i;
             it["track"] = s.playlist[i].title;
             it["text"] = s.playlist[i].title;
-            it["artist"] = s.artist.empty() ? "panicast" : s.artist;
-            it["album"] = s.album.empty() ? "panicast" : s.album;
+            // Per-row values from the queue item (META-1 carried artist/album through
+            //   PlaylistItem); fall back to the current track's, then "panicast" — a
+            //   mixed queue (jumps between feeds) keeps each row's real metadata.
+            it["artist"] = !s.playlist[i].artist.empty()
+                               ? s.playlist[i].artist
+                               : (s.artist.empty() ? "panicast" : s.artist);
+            it["album"] = !s.playlist[i].album.empty() ? s.playlist[i].album
+                                                       : (s.album.empty() ? "panicast" : s.album);
             it["duration"] = s.playlist[i].duration;
             nlohmann::json go;
             go["cmd"] = nlohmann::json::array({"playlist", "index", std::to_string(i)});
