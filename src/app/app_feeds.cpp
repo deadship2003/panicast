@@ -49,8 +49,7 @@ static TreeNodePtr parse_douyin_user_videos(const std::string &url, const std::s
     std::error_code ec;
     if (!ck.empty() && std::filesystem::exists(ck, ec)) {
         std::ifstream cf(ck);
-        std::string content((std::istreambuf_iterator<char>(cf)),
-                            std::istreambuf_iterator<char>());
+        std::string content((std::istreambuf_iterator<char>(cf)), std::istreambuf_iterator<char>());
         cookie_header = DouyinApi::build_cookie_header_from_txt(content, "douyin.com");
     }
 
@@ -242,6 +241,7 @@ TreeNodePtr App::parse_feed_by_type(TreeNodePtr node, const std::string &url, UR
                     ep->title = v.title;
                     ep->url = v.url;
                     ep->is_youtube = true;
+                    ep->art_url = v.thumbnail; // ART-2
                     ep->children_loaded = true;
                     ep->parent = result;
                     result->children.push_back(ep);
@@ -343,7 +343,7 @@ void App::cache_youtube_videos(TreeNodePtr node, URLType cur_type, const std::st
                     id = child->url.substr(start, end == std::string::npos ? std::string::npos
                                                                            : end - start);
                 }
-                videos.push_back({id, child->title, child->url});
+                videos.push_back({id, child->title, child->url, child->art_url});
             }
             std::string ch_name = result->channel_name;
             if (ch_name.empty())
@@ -386,6 +386,13 @@ void App::commit_feed_result(TreeNodePtr node, TreeNodePtr result, const std::st
     {
         std::lock_guard<std::recursive_mutex> lock(library_.tree_mutex());
         if (result) {
+            // ART-2: the parsed channel carries the feed cover (itunes:image) — the
+            //   live subscription node keeps its identity but ADOPTS the artwork and
+            //   the description line; without this every refresh dropped them.
+            if (!result->art_url.empty())
+                node->art_url = result->art_url;
+            if (!result->subtext.empty() && node->subtext.empty())
+                node->subtext = result->subtext;
             if (has_children) {
                 node->children = result->children;
                 for (auto &c : node->children)

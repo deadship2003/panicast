@@ -183,6 +183,15 @@ int YouTubeChannelParser::parse_video_list(const std::string &url, TreeNodePtr p
             std::string eurl = j.value("url", "");
             std::string wpurl = j.value("webpage_url", "");
             int dur = j.value("duration", 0);
+            // ART-2: flat entries carry a thumbnails array (or a plain thumbnail URL) —
+            //   pick the LAST (largest) entry.
+            std::string thumb;
+            if (j.contains("thumbnails") && j["thumbnails"].is_array() &&
+                !j["thumbnails"].empty()) {
+                thumb = j["thumbnails"].back().value("url", "");
+            }
+            if (thumb.empty())
+                thumb = j.value("thumbnail", "");
 
             // Video entry: _type empty or "url", and id is a valid 11-char id
             if ((etype.empty() || etype == "url") && is_valid_video_id(id)) {
@@ -192,10 +201,11 @@ int YouTubeChannelParser::parse_video_list(const std::string &url, TreeNodePtr p
                 ep->url = fmt::format("https://www.youtube.com/watch?v={}", id);
                 ep->is_youtube = true;
                 ep->duration = dur;
+                ep->art_url = thumb; // ART-2
                 ep->children_loaded = true;
                 ep->parent = parent;
                 parent->children.push_back(ep);
-                videos.push_back({id, title, ep->url});
+                videos.push_back({id, title, ep->url, thumb});
                 count++;
             } else if (!wpurl.empty() || !eurl.empty()) {
                 // Sub-playlist (e.g. each playlist inside the Playlists tab) -> lazy feed, expandable

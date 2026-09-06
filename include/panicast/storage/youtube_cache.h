@@ -11,6 +11,7 @@ namespace panicast
 
 struct YouTubeVideoInfo {
     std::string id, title, url;
+    std::string thumbnail; // ART-2: video thumbnail (remote browse / now-playing art)
 };
 struct YouTubeChannelCache {
     std::string channel_name;

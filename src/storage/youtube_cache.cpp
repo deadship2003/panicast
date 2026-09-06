@@ -69,8 +69,8 @@ bool YouTubeCache::load_from_db(const std::string &channel_url) {
             json j = json::parse(videos_json);
             if (j.is_array()) {
                 for (const auto &vid : j) {
-                    cache.videos.push_back(
-                        {vid.value("id", ""), vid.value("title", ""), vid.value("url", "")});
+                    cache.videos.push_back({vid.value("id", ""), vid.value("title", ""),
+                                            vid.value("url", ""), vid.value("thumbnail", "")});
                 }
             }
         } catch (const std::exception &e) {
@@ -88,7 +88,8 @@ void YouTubeCache::save_to_db(const std::string &channel_url, const std::string 
         return;
     json videos_json = json::array();
     for (const auto &vi : videos) {
-        videos_json.push_back({{"id", vi.id}, {"title", vi.title}, {"url", vi.url}});
+        videos_json.push_back(
+            {{"id", vi.id}, {"title", vi.title}, {"url", vi.url}, {"thumbnail", vi.thumbnail}});
     }
     DatabaseManager::instance().youtube_cache_save(channel_url, channel_name, videos_json.dump());
 }

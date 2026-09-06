@@ -276,6 +276,7 @@ void App::enter_account_node(TreeNodePtr node) {
                             ep->title = v.title;
                             ep->url = v.url;
                             ep->is_youtube = true;
+                            ep->art_url = v.thumbnail; // ART-2
                             ep->children_loaded = true;
                             ep->parent = n;
                             n->children.push_back(ep);
@@ -333,6 +334,7 @@ void App::enter_account_node(TreeNodePtr node) {
                                 ep->title = v.title;
                                 ep->url = v.url;
                                 ep->is_youtube = true;
+                                ep->art_url = v.thumbnail; // ART-2
                                 ep->children_loaded = true;
                                 ep->parent = n;
                                 n->children.push_back(ep);
@@ -344,6 +346,11 @@ void App::enter_account_node(TreeNodePtr node) {
                             c->is_youtube = true;
                             c->parent = n;
                         }
+                        // ART-2: the channel row itself gets the first video's thumbnail
+                        //   when nothing better is on the node (avatar needs an extra API
+                        //   call; this approximation reads well in the remote browse).
+                        if (n->art_url.empty() && !n->children.empty())
+                            n->art_url = n->children.front()->art_url;
                     } else {
                         n->parse_failed = true;
                         n->error_msg = err.empty() ? "no videos" : err;
@@ -436,7 +443,8 @@ void App::delete_account_node(TreeNodePtr node) {
             return;
         node = p;
     }
-    if (!frontend_->confirm_box("Delete Google account '" + node->title + "'? (all its YouTube data)"))
+    if (!frontend_->confirm_box("Delete Google account '" + node->title +
+                                "'? (all its YouTube data)"))
         return;
     AccountsManager::instance().delete_account(node->account_id);
     EVENT_LOG(fmt::format("Y: account #{} deleted", node->account_id));

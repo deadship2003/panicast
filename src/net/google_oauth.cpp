@@ -455,6 +455,16 @@ std::vector<YouTubeVideoInfo> GoogleOAuth::fetch_channel_videos(const std::strin
                     v.id = vid;
                     v.title = sn.value("title", "Untitled");
                     v.url = "https://www.youtube.com/watch?v=" + vid;
+                    // ART-2: pick the largest available thumbnail variant
+                    if (sn.contains("thumbnails")) {
+                        const auto &th = sn["thumbnails"];
+                        for (const char *k : {"maxres", "high", "medium", "default"})
+                            if (th.contains(k) && th[k].contains("url")) {
+                                v.thumbnail = th[k].value("url", "");
+                                if (!v.thumbnail.empty())
+                                    break;
+                            }
+                    }
                     out.push_back(v);
                 }
             }
