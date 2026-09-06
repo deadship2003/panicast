@@ -1433,6 +1433,11 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
+    } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "mpv") {
+        // META-5: client-TUI ':' box — raw mpv command passthrough (args joined).
+        if (bus_ && cmd.size() > 2)
+            bus_->push({"mpv", std::vector<std::string>(cmd.begin() + 2, cmd.end()), c.client_id});
+        return nlohmann::json::object();
     } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "search") {
         // META-4: search submitted from the phone's input box. Runs the current
         //   mode's query search on the UI thread, waits (bounded) for the mirrored
@@ -1648,20 +1653,47 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   screen by filtering on node == "home" — anything else never shows.
         // Internal name (sent in the go cmd) + display label — Y mode is labelled the
         //   way the TUI user knows it, not as the internal "ACCOUNT".
-        static const std::vector<std::pair<std::string, const char *>> modes = {
-            {"RADIO", "Radio"},           {"PODCAST", "Podcasts"},  {"FAVOURITE", "Favourites"},
-            {"HISTORY", "History"},       {"ONLINE", "Online (O)"}, {"ACCOUNT", "YouTube (Y)"},
-            {"BILIBILI", "Bilibili (B)"}, {"TIKTOK", "TikTok (T)"}, {"IPTV", "IPTV"},
+        // META-5: per-mode icons (Wikimedia Commons emoji thumbs, verified
+        //   reachable; absolute URLs — the app fetches them directly, no auth).
+        static const std::vector<std::tuple<std::string, const char *, const char *>> modes = {
+            {"RADIO", "Radio",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/6/61/"
+             "Emoji_u1f4fb.svg/250px-Emoji_u1f4fb.svg.png"},
+            {"PODCAST", "Podcasts",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b5/Emoji_u1f3a7.svg/"
+             "250px-Emoji_u1f3a7.svg.png"},
+            {"FAVOURITE", "Favourites",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0d/Emoji_u1f31f.svg/"
+             "250px-Emoji_u1f31f.svg.png"},
+            {"HISTORY", "History",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ce/Emoji_u1f553.svg/"
+             "250px-Emoji_u1f553.svg.png"},
+            {"ONLINE", "Online (O)",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9b/Emoji_u1f50d.svg/"
+             "250px-Emoji_u1f50d.svg.png"},
+            {"ACCOUNT", "YouTube (Y)",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Emoji_u1f3ac.svg/"
+             "250px-Emoji_u1f3ac.svg.png"},
+            {"BILIBILI", "Bilibili (B)",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Emoji_u1f3b6.svg/"
+             "250px-Emoji_u1f3b6.svg.png"},
+            {"TIKTOK", "TikTok (T)",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/3/36/Emoji_u1f4fa.svg/"
+             "250px-Emoji_u1f4fa.svg.png"},
+            {"IPTV", "IPTV",
+             "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/Emoji_u1f4d6.svg/"
+             "250px-Emoji_u1f4d6.svg.png"},
         };
         int weight = 1;
         for (const auto &mi : modes) {
-            const std::string &m = mi.first;
+            const std::string &m = std::get<0>(mi);
             nlohmann::json go;
             go["cmd"] = nlohmann::json::array({"panicast", "mode", m});
             nlohmann::json item;
             item["id"] = "mode-" + m;
             item["node"] = "home";
-            item["text"] = std::string(m == mode_name ? "▶ " : "") + mi.second;
+            item["text"] = std::string(m == mode_name ? "▶ " : "") + std::get<1>(mi);
+            item["icon"] = std::get<2>(mi); // META-5
             item["weight"] = weight++;
             item["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(item);
@@ -1673,6 +1705,8 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             item["id"] = "currentplaylist";
             item["node"] = "home";
             item["text"] = "Current Playlist";
+            item["icon"] = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/"
+                           "Emoji_u1f3bc.svg/250px-Emoji_u1f3bc.svg.png"; // META-5
             item["weight"] = weight;
             item["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(item);
