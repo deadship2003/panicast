@@ -1580,15 +1580,39 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         r["item_loop"] = loop;
         return r;
     } else if (k == "panicast" && cmd.size() > 2 && (cmd[1] == "fav" || cmd[1] == "unfav")) {
-        // META-6: favourites. "fav current" = the playing programme; "fav N" =
-        //   browse row N; "unfav N" = remove (F-mode long-press).
-        if (cmd[2] == "current")
-            push("fav_current");
-        else if (cmd[1] == "fav")
-            push_arg("fav_row", cmd[2]);
-        else
-            push_arg("unfav_row", cmd[2]);
-        return nlohmann::json::object();
+        // META-7f: favourites with user feedback. The reply is a small page so the
+        //   app shows a toast-like confirmation ("★ Added to favourites" / "Removed
+        //   from favourites") instead of silently doing nothing.
+        std::string action, index;
+        if (cmd[2] == "current") {
+            action = "fav_current";
+            index = "current";
+        } else if (cmd[1] == "fav") {
+            action = "fav_row";
+            index = cmd[2];
+        } else {
+            action = "unfav_row";
+            index = cmd[2];
+        }
+        push_arg(action.c_str(), index);
+
+        nlohmann::json r;
+        nlohmann::json loop = nlohmann::json::array();
+        nlohmann::json msg;
+        msg["text"] = (cmd[1] == "fav") ? "★ Added to favourites" : "✓ Removed from favourites";
+        // show the target name if we can resolve it from the browse mirror
+        if (control_ && cmd[2] != "current") {
+            auto snap = control_->snapshot_state();
+            int row = std::atoi(cmd[2].c_str());
+            if (row >= 0 && row < (int)snap.browse.size())
+                msg["text"] =
+                    std::string(cmd[1] == "fav" ? "★ ★ " : "✓ Removed: ") + snap.browse[row].title;
+        }
+        loop.push_back(msg);
+        r["count"] = 1;
+        r["offset"] = 0;
+        r["item_loop"] = loop;
+        return r;
     } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "handover") {
         // N10.5 zero-drop takeover: the TUI asks us to hand our listener + live phone
         //   connections to it (fds duplicated via SCM_RIGHTS; the phone never drops).
@@ -1708,7 +1732,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 int virt = 0;
                 if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK")
                     virt += 1; // search row
-                if (m == "ACCOUNT")
+                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK")
                     virt += 1; // login row
                 if (virt > 0)
                     to = std::max(from, std::min(to, from + (size_t)window - (size_t)virt));
@@ -1722,53 +1746,71 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 std::string m = control_->snapshot_state().mode;
                 // META-6: login entry at the top of account-bearing modes (before
                 //   the search row) — tappable, opens the authorization page.
-                if (m == "ACCOUNT") { // Y only — B/T login stays in the TUI ('a' key)
-                    // META-7c: one-tap login — pre-fetch the device code (cached
-                    //   ~10 min) and put the auth URL as a weblink. Tapping the row
-                    //   opens the browser directly on the Google auth page.
-                    bool fresh = ylogin_cache_.valid &&
-                                 std::chrono::steady_clock::now() - ylogin_cache_.fetched_at <
-                                     std::chrono::seconds(600);
+                if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK") {
+                    // META-7e: unified one-tap login row (Y/B/T share this pattern).
+                    //   Pre-fetch the auth URL (cached 10 min), put it as a weblink
+                    //   → one tap opens the browser on the auth page. Background
+                    //   poll rides the bus action. Fallback: go-action on failure.
+                    auto &lc = login_cache_[m];
+                    bool fresh = lc.valid && std::chrono::steady_clock::now() - lc.fetched_at <
+                                                 std::chrono::seconds(600);
                     if (!fresh) {
-                        auto dc = GoogleOAuth::request_device_code();
-                        if (dc.ok) {
-                            ylogin_cache_.url = dc.verification_url;
-                            ylogin_cache_.user_code = dc.user_code;
-                            ylogin_cache_.device_code = dc.device_code;
-                            ylogin_cache_.fetched_at = std::chrono::steady_clock::now();
-                            ylogin_cache_.valid = true;
-                            if (bus_) // start the background poll
-                                bus_->push({"_remote_login_youtube",
-                                            {dc.device_code, std::to_string(dc.interval)},
-                                            0});
+                        lc.valid = false;
+                        if (m == "ACCOUNT") {
+                            auto dc = GoogleOAuth::request_device_code();
+                            if (dc.ok) {
+                                lc.url = dc.verification_url;
+                                if (!dc.user_code.empty())
+                                    lc.url += "?user_code=" + dc.user_code;
+                                lc.user_code = dc.user_code;
+                                lc.poll_key = dc.device_code;
+                                lc.bus_action = "_remote_login_youtube";
+                                lc.valid = true;
+                            }
+                        } else if (m == "BILIBILI") {
+                            auto qr = BilibiliAPI::request_qrcode();
+                            if (qr.ok && !qr.url.empty()) {
+                                lc.url = qr.url;
+                                lc.user_code = "";
+                                lc.poll_key = qr.qrcode_key;
+                                lc.bus_action = "_remote_login_bilibili";
+                                lc.valid = true;
+                            }
+                        } else if (m == "TIKTOK") {
+                            DouyinApi dy;
+                            auto qr = dy.request_qrcode();
+                            if (qr.ok && !qr.qr_content.empty()) {
+                                lc.url = qr.qr_content;
+                                lc.user_code = "";
+                                lc.poll_key = qr.token;
+                                lc.bus_action = "_remote_login_tiktok";
+                                lc.valid = true;
+                            }
+                        }
+                        if (lc.valid) {
+                            lc.fetched_at = std::chrono::steady_clock::now();
+                            // start the background poll
+                            if (bus_ && !lc.bus_action.empty())
+                                bus_->push({lc.bus_action, {lc.poll_key}, 0});
                         }
                     }
-                    if (ylogin_cache_.valid) {
-                        // META-7d: embed user_code in the URL — Google's device page
-                        //   auto-fills it from the ?user_code= parameter (verified:
-                        //   accounts.google.com/device?user_code=X returns the code
-                        //   embedded in the page). User just taps → browser opens →
-                        //   code pre-filled → confirm.
-                        std::string url = ylogin_cache_.url;
-                        if (!ylogin_cache_.user_code.empty()) {
-                            url += (url.find('?') != std::string::npos ? "&" : "?");
-                            url += "user_code=" + ylogin_cache_.user_code;
-                        }
+                    if (lc.valid) {
                         nlohmann::json row;
-                        row["text"] = ylogin_cache_.user_code.empty()
-                                          ? "🔓 Login Google (opens browser)"
-                                          : "🔓 Login · auto-code: " + ylogin_cache_.user_code;
-                        row["weblink"] = url;
+                        row["text"] = lc.user_code.empty() ? "🔓 Login (opens browser)"
+                                                           : "🔓 Login · " + lc.user_code;
+                        row["weblink"] = lc.url;
                         loop.push_back(row);
                     } else {
+                        // fallback: go-action (returns a page with the link)
                         nlohmann::json go;
-                        go["cmd"] = nlohmann::json::array({"panicast", "login", "youtube"});
+                        go["cmd"] = nlohmann::json::array({"panicast", "login", m});
                         nlohmann::json row;
-                        row["text"] = "🔓 Login Google";
+                        row["text"] = "🔓 Login";
                         row["actions"] = nlohmann::json({{"go", go}});
                         loop.push_back(row);
                     }
-                }
+                } // close if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK")
+
                 if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK") {
                     nlohmann::json do_cmd =
                         nlohmann::json::array({"panicast", "search", "__INPUT__"});
@@ -1803,10 +1845,14 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     if (!row.art_url.empty())
                         it["icon"] = row.art_url;
                     go["cmd"] = nlohmann::json::array({"panicast", "browse", row_idx});
-                    // META-6 long-press menu: favourite everywhere, delete inside
-                    //   FAVOURITE mode (the tree IS the favourites list there).
+                    // META-7f long-press menu with feedback: favourite everywhere,
+                    //   delete in FAVOURITE mode, delete search records in ONLINE.
                     nlohmann::json more;
-                    if (control_ && control_->snapshot_state().mode == "FAVOURITE")
+                    std::string cur_mode = control_ ? control_->snapshot_state().mode : "";
+                    if (cur_mode == "FAVOURITE")
+                        more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
+                    else if (cur_mode == "ONLINE" && row.is_branch && row.title.rfind("🔍", 0) == 0)
+                        // search-record node → delete from history
                         more["cmd"] = nlohmann::json::array({"panicast", "unfav", row_idx});
                     else
                         more["cmd"] = nlohmann::json::array({"panicast", "fav", row_idx});
@@ -1821,7 +1867,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             if (from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
                 search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK";
-                login_row = m == "ACCOUNT";
+                login_row = m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK";
             }
             r["count"] = (int)total + (search_row ? 1 : 0) +
                          (login_row ? 1 : 0); // META-4/META-6 virtual rows

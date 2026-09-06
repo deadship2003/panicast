@@ -193,8 +193,12 @@ std::string IniConfig::get_remote_lms_pass() const {
 }
 
 std::string IniConfig::get_remote_player_name() const {
-    // Display name of the virtual player Squeezer sees. Empty → "panicast".
-    return get("remote", "player_name", "panicast");
+    // Display name of the virtual player Squeezer sees. Falls back to server_name
+    //   (the discovery display name) for consistency, then "panicast".
+    std::string v = get("remote", "player_name", "");
+    if (v.empty())
+        v = get("remote", "server_name", "");
+    return v.empty() ? "panicast" : v;
 }
 
 // ── misc getters: search/history/region/network/display (D27: moved out-of-line) ──

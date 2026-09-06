@@ -195,16 +195,19 @@ private:
                                               //   mixer volume; mpv holds the
                                               //   real audio state)
 
-    // META-7c: cached Google device-code for the Y login row's weblink. Fetched
-    //   once when Y-mode root is built with no account; reused until expired.
-    //   Background poll is pushed via the bus alongside the weblink.
-    struct {
-        std::string url;
-        std::string user_code;
-        std::string device_code;
+    // META-7e: unified login cache for the login-row weblinks (Y/B/T share the
+    //   exact same pattern: pre-fetch auth URL → cache → weblink + background
+    //   poll). One entry per mode; fetched on first browse-root build with no
+    //   account, reused until expiry (10 min).
+    struct LoginCache {
+        std::string url;        // auth page URL (the weblink)
+        std::string user_code;  // display code (Y only; B/T QR has none)
+        std::string poll_key;   // device_code / qrcode_key for the background poll
+        std::string bus_action; // "_remote_login_youtube" / "_remote_login_bilibili" / ...
         std::chrono::steady_clock::time_point fetched_at;
         bool valid = false;
-    } ylogin_cache_;
+    };
+    std::map<std::string, LoginCache> login_cache_; // mode → cache
 
     // N10.4: Bayeux clientId → held listen connection. Guarded by listeners_mtx_.
     std::mutex listeners_mtx_;
