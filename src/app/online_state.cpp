@@ -147,7 +147,11 @@ void OnlineState::update_search_node_title(TreeNodePtr node, const std::string &
     std::string region_name = ITunesSearch::get_region_name(region);
     std::string time_str = get_current_time_str();
 
-    node->title = fmt::format("🔍 [{}][{}][{:4d}][\"{}\"]", time_str, region_name, count, query);
+    // Display-friendly: the query IS the title; details (count/region/time) go to the
+    //   second line (subtext) instead of a bracket wall that reads as garbage on the
+    //   phone. The search id (url) still carries query+region for dedup.
+    node->title = fmt::format("🔍 {}", query);
+    node->subtext = fmt::format("{} results · {} · {}", count, region_name, time_str);
 }
 
 std::string OnlineState::make_search_id(const std::string &query, const std::string &region) {
