@@ -13,13 +13,16 @@
 
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <poll.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "panicast/app/daemon_mode.h"
 #include "panicast/config/ini_config.h"
 #include "panicast/core/paths.h"
+#include "panicast/net/lms_server.h"
 
 namespace panicast
 {
@@ -106,6 +109,101 @@ std::string lms_status_reply() {
     ::close(fd);
     size_t sep = resp.find("\r\n\r\n");
     return sep == std::string::npos ? "" : resp.substr(sep + 4);
+}
+
+// ── N10.5 zero-drop handover (TUI side) ───────────────────────────────────────
+// Squeeze Client must not see a disconnect when the engine owner changes. The
+//   outgoing owner duplicates its listener + live connection fds via SCM_RIGHTS;
+//   the incoming owner adopts them. Both directions funnel through these helpers,
+//   and every failure falls back to the plain systemctl flow.
+
+static std::string handover_sock_dir() {
+    const char *xdg = std::getenv("XDG_RUNTIME_DIR");
+    if (xdg && *xdg)
+        return xdg;
+    return "/tmp";
+}
+
+// POST one slim command to the daemon's LMS port (fire-and-forget; the reply body is
+//   not needed — send_handover_fds runs on a detached thread inside the daemon).
+static bool post_lms_handover(const std::string &sock_path) {
+    IniConfig::instance().load();
+    int port = IniConfig::instance().get_remote_lms_port();
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return false;
+    timeval tv{3, 0};
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons((uint16_t)port);
+    a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    if (::connect(fd, (sockaddr *)&a, sizeof(a)) != 0) {
+        ::close(fd);
+        return false;
+    }
+    std::string auth = b64encode(IniConfig::instance().get_remote_lms_user() + ":" +
+                                 IniConfig::instance().get_remote_lms_pass());
+    std::string body = "[{\"channel\":\"/slim/request\",\"data\":{\"response\":\"/handover\","
+                       "\"request\":[\"00:00:00:00:84:21\",[\"panicast\",\"handover\",\"" +
+                       sock_path + "\"]]}},\"id\":\"999\"}]";
+    std::string req =
+        "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " + auth +
+        "\r\nContent-Type: text/json\r\nContent-Length: " + std::to_string(body.size()) +
+        "\r\nConnection: close\r\n\r\n" + body;
+    bool ok = ::send(fd, req.data(), req.size(), MSG_NOSIGNAL) == (ssize_t)req.size();
+    char sink[512];
+    while (::recv(fd, sink, sizeof(sink), 0) > 0)
+        ; // drain (the daemon's detached transfer thread needs a beat to connect)
+    ::close(fd);
+    return ok;
+}
+
+// Listen on a per-pid unix socket, ask the daemon to hand over, receive + stage.
+static bool takeover_via_fd_passing() {
+    std::string path =
+        handover_sock_dir() + "/panicast-tui-hs-" + std::to_string(::getpid()) + ".sock";
+    ::unlink(path.c_str());
+    int ls = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (ls < 0)
+        return false;
+    sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+    if (::bind(ls, (sockaddr *)&addr, sizeof(addr)) != 0 || ::listen(ls, 1) != 0) {
+        ::close(ls);
+        ::unlink(path.c_str());
+        return false;
+    }
+    if (!post_lms_handover(path)) {
+        ::close(ls);
+        ::unlink(path.c_str());
+        return false;
+    }
+    // Bounded wait for the daemon's detached transfer thread to connect.
+    pollfd p{ls, POLLIN, 0};
+    if (::poll(&p, 1, 3000) <= 0) {
+        ::close(ls);
+        ::unlink(path.c_str());
+        return false;
+    }
+    int conn = ::accept(ls, nullptr, nullptr);
+    ::close(ls);
+    ::unlink(path.c_str());
+    if (conn < 0)
+        return false;
+    int listen_fd = -1;
+    std::vector<LmsAdoptedConn> conns;
+    bool ok = lms_recv_handover_msg(conn, listen_fd, conns);
+    ::close(conn);
+    if (!ok || listen_fd < 0) {
+        if (listen_fd >= 0)
+            ::close(listen_fd);
+        return false;
+    }
+    LmsServer::stage_handover(listen_fd, std::move(conns));
+    return true;
 }
 
 // N10.1: `panicast start` refuses when the daemon is already running (user-final
@@ -243,6 +341,10 @@ bool service_handover_takeover() {
     int pid = 0;
     if (!daemon_pid_alive(&pid))
         return false;
+    // N10.5: ZERO-DROP takeover — receive the daemon's listener + live phone
+    //   connections (staged; LmsServer::start adopts them). Falls through to the
+    //   plain stop on any failure, exactly the pre-N10.5 behaviour.
+    takeover_via_fd_passing();
     // N10.3: the service lives in the USER manager — no auth needed. A pre-N10.3
     //   install may still run the SYSTEM unit (with its polkit rule); stop that too
     //   before the pidfile fallback so a migration-era daemon can't survive beside
@@ -265,10 +367,32 @@ bool service_handover_takeover() {
 }
 
 void service_handover_restore() {
-    // N10.3: user unit — start needs no privileges. If the user manager isn't
-    //   available (no session), this fails silently; the next `panicast start` or
-    //   TUI session retries.
-    ::system(("systemctl --user start " + std::string(UNIT) + " 2>/dev/null").c_str());
+    // N10.5: ZERO-DROP restore — when THIS process owns live phone connections (it
+    //   took them over at boot, or served them itself), transfer them to the newly
+    //   started daemon before exiting. The daemon listens on its boot socket for a
+    //   few seconds (see run_daemon); we connect and send; our copies then simply
+    //   die with _exit while the daemon's dups keep serving.
+    if (LmsServer::instance().is_running()) {
+        std::string intent = handover_sock_dir() + "/panicast-handover.intent";
+        FILE *f = fopen(intent.c_str(), "w"); // tells the booting daemon to expect us
+        if (f)
+            fclose(f);
+        ::system(("systemctl --user start " + std::string(UNIT) + " 2>/dev/null").c_str());
+        std::string path = handover_sock_dir() + "/panicast-daemon-hs.sock";
+        for (int i = 0; i < 40; ++i) { // bounded wait for the daemon's boot socket
+            if (::access(path.c_str(), F_OK) == 0)
+                break;
+            usleep(250 * 1000);
+        }
+        LmsServer::instance().send_handover_fds(path); // no-op on failure
+        LmsServer::instance().detach_for_exit();
+        ::unlink(intent.c_str());
+    } else {
+        // N10.3: user unit — start needs no privileges. If the user manager isn't
+        //   available (no session), this fails silently; the next `panicast start` or
+        //   TUI session retries.
+        ::system(("systemctl --user start " + std::string(UNIT) + " 2>/dev/null").c_str());
+    }
 }
 
 // N10.3: install (or refresh) the USER-space service unit — the whole point is that

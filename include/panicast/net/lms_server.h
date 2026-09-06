@@ -49,6 +49,20 @@ namespace panicast
 
 class RemoteCommandBus;
 
+// N10.5 zero-drop handover: a live connection adopted from the previous engine owner
+//   (SCM_RIGHTS transfer — the socket itself never closes, so Squeeze Client never
+//   sees a disconnect across a TUI↔service switch).
+struct LmsAdoptedConn {
+    int fd = -1;
+    bool listener = false;  // held event-stream conn (resume listen_loop)
+    bool authed = false;    // Basic-auth already verified
+    std::string bayeux_cid; // for listener conns
+};
+
+// Receive one handover message (metadata JSON line + SCM_RIGHTS fds) from an
+//   ALREADY-CONNECTED unix socket. Returns false on any failure (caller falls back).
+bool lms_recv_handover_msg(int conn_fd, int &listen_fd, std::vector<LmsAdoptedConn> &out);
+
 // One IPv4 CIDR entry (network order). Bare IPs parse as /32. Namespace scope so the
 //   file-local parser in lms_server.cpp can build the list.
 struct LmsCidr {
@@ -65,10 +79,25 @@ public:
 
     // Bind + listen + spawn the accept thread. `control` is the thread-safe state
     //   snapshot source; `bus` receives the transport/volume/seek commands (executed on
-    //   the TUI main thread). Returns true on success.
+    //   the TUI main thread). Returns true on success. If a handover was STAGED (see
+    //   stage_handover), the listener + live connections are ADOPTED instead of bound.
     bool start(const std::string &bind_addr, int port, RemoteControlInterface *control,
                RemoteCommandBus *bus);
     void stop();
+
+    // ── N10.5 zero-drop handover ─────────────────────────────────────────────
+    // Stage fds received from the previous owner; start() adopts them (first clears
+    // any previous staging — only the latest handover wins).
+    static void stage_handover(int listen_fd, std::vector<LmsAdoptedConn> conns);
+    // True when a staged handover is pending (start() will adopt instead of bind).
+    static bool handover_staged();
+    // Send OUR listener + all live connection fds to the next owner over the unix
+    //   socket at `unix_path` (one SCM_RIGHTS sendmsg; kernel duplicates the fds, so
+    //   our later close does not disturb the phone). Detached-thread safe.
+    void send_handover_fds(const std::string &unix_path);
+    // Quiesce for exit AFTER the fds have been transferred: stop the accept/reader
+    //   threads WITHOUT closing the connection fds (the new owner serves them now).
+    void detach_for_exit();
 
     bool is_running() const {
         return running_.load();

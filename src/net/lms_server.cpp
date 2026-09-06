@@ -19,6 +19,7 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 namespace panicast
@@ -160,6 +161,196 @@ LmsServer::~LmsServer() {
     stop();
 }
 
+// ── N10.5 zero-drop handover ────────────────────────────────────────────────────
+
+bool lms_recv_handover_msg(int conn_fd, int &listen_fd, std::vector<LmsAdoptedConn> &out) {
+    // One sendmsg carried: iov = "<metadata JSON>\n", cmsg = all fds (listen first).
+    std::vector<char> buf(65536);
+    std::vector<char> cmsg_buf(CMSG_SPACE(sizeof(int) * 64));
+    struct msghdr msgh{};
+    struct iovec iov{buf.data(), buf.size()};
+    msgh.msg_iov = &iov;
+    msgh.msg_iovlen = 1;
+    msgh.msg_control = cmsg_buf.data();
+    msgh.msg_controllen = cmsg_buf.size();
+    ssize_t n = ::recvmsg(conn_fd, &msgh, 0);
+    if (n <= 0) {
+        LOG(fmt::format("[LMS-HANDOVER] recvmsg failed: {}", std::strerror(errno)));
+        return false;
+    }
+    std::vector<int> fds;
+    for (struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msgh); cmsg; cmsg = CMSG_NXTHDR(&msgh, cmsg)) {
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            int *data = (int *)CMSG_DATA(cmsg);
+            size_t count = (cmsg->cmsg_len - CMSG_LEN(0)) / sizeof(int);
+            fds.assign(data, data + count);
+        }
+    }
+    if (fds.empty()) {
+        LOG("[LMS-HANDOVER] no fds in message");
+        return false;
+    }
+    std::string payload(buf.data(), (size_t)n);
+    size_t nl = payload.find('\n');
+    try {
+        nlohmann::json meta = nlohmann::json::parse(
+            payload.substr(0, nl == std::string::npos ? payload.size() : nl), nullptr, false);
+        int lfd = meta.value("listen", -1);
+        if (lfd < 0 || lfd >= (int)fds.size()) {
+            LOG("[LMS-HANDOVER] bad listen index in metadata");
+            for (int fd : fds)
+                ::close(fd);
+            return false;
+        }
+        listen_fd = fds[lfd];
+        for (const auto &j : meta.value("conns", nlohmann::json::array())) {
+            LmsAdoptedConn ac;
+            int idx = j.value("fd", -1);
+            if (idx < 0 || idx >= (int)fds.size())
+                continue;
+            ac.fd = fds[idx];
+            ac.listener = j.value("listener", false);
+            ac.authed = j.value("authed", false);
+            ac.bayeux_cid = j.value("cid", std::string());
+            out.push_back(ac);
+        }
+        // close fds we did not map into entries (incl. the listen if unmapped)
+        for (size_t i = 0; i < fds.size(); ++i) {
+            bool used = (int)i == lfd;
+            for (const auto &ac : out)
+                used = used || ac.fd == fds[i];
+            if (!used)
+                ::close(fds[i]);
+        }
+        return true;
+    } catch (const std::exception &e) {
+        LOG(fmt::format("[LMS-HANDOVER] metadata parse failed: {}", e.what()));
+        for (int fd : fds)
+            ::close(fd);
+        return false;
+    }
+}
+
+// Staged adoption state (process-global: the TUI receives the fds BEFORE App/LmsServer
+//   exist, start() picks them up when the engine boots).
+namespace
+{
+std::mutex g_stage_mtx;
+int g_stage_listen_fd = -1;
+std::vector<LmsAdoptedConn> g_stage_conns;
+} // namespace
+
+void LmsServer::stage_handover(int listen_fd, std::vector<LmsAdoptedConn> conns) {
+    std::lock_guard<std::mutex> lk(g_stage_mtx);
+    if (g_stage_listen_fd >= 0)
+        ::close(g_stage_listen_fd); // superseded staging (shouldn't happen)
+    for (auto &c : g_stage_conns)
+        if (c.fd >= 0)
+            ::close(c.fd);
+    g_stage_listen_fd = listen_fd;
+    g_stage_conns = std::move(conns);
+}
+
+bool LmsServer::handover_staged() {
+    std::lock_guard<std::mutex> lk(g_stage_mtx);
+    return g_stage_listen_fd >= 0;
+}
+
+void LmsServer::send_handover_fds(const std::string &unix_path) {
+    // Snapshot the fds to transfer under the conn lock (thread-safe against reaping).
+    std::vector<int> fds;
+    nlohmann::json meta;
+    meta["conns"] = nlohmann::json::array();
+    {
+        std::lock_guard<std::mutex> lk(conns_mtx_);
+        reap_done();
+        if (listen_fd_ < 0)
+            return;
+        fds.push_back(listen_fd_);
+        meta["listen"] = 0;
+        for (auto &c : conns_) {
+            if (c->fd < 0)
+                continue;
+            fds.push_back(c->fd);
+            nlohmann::json j;
+            j["fd"] = (int)fds.size() - 1;
+            j["listener"] = c->listener;
+            j["authed"] = c->authed.load();
+            j["cid"] = c->bayeux_cid;
+            meta["conns"].push_back(j);
+        }
+    }
+    int us = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    if (us < 0)
+        return;
+    struct sockaddr_un addr{};
+    addr.sun_family = AF_UNIX;
+    strncpy(addr.sun_path, unix_path.c_str(), sizeof(addr.sun_path) - 1);
+    if (::connect(us, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
+        LOG(fmt::format("[LMS-HANDOVER] connect {} failed: {}", unix_path, std::strerror(errno)));
+        ::close(us);
+        return;
+    }
+    // One sendmsg: metadata JSON line as iovec + every fd in a single SCM_RIGHTS cmsg.
+    std::string payload = meta.dump() + "\n";
+    std::vector<char> cmsg_buf(CMSG_SPACE(sizeof(int) * fds.size()));
+    struct msghdr msgh{};
+    struct iovec iov{payload.data(), payload.size()};
+    msgh.msg_iov = &iov;
+    msgh.msg_iovlen = 1;
+    msgh.msg_control = cmsg_buf.data();
+    msgh.msg_controllen = cmsg_buf.size();
+    struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msgh);
+    cmsg->cmsg_level = SOL_SOCKET;
+    cmsg->cmsg_type = SCM_RIGHTS;
+    cmsg->cmsg_len = CMSG_LEN(sizeof(int) * fds.size());
+    memcpy(CMSG_DATA(cmsg), fds.data(), sizeof(int) * fds.size());
+    msgh.msg_controllen = cmsg->cmsg_len;
+    if (::sendmsg(us, &msgh, 0) < 0) {
+        LOG(fmt::format("[LMS-HANDOVER] sendmsg failed: {}", std::strerror(errno)));
+        ::close(us);
+        return;
+    }
+    ::shutdown(us, SHUT_WR); // EOF signals "that's all"
+    LOG(fmt::format("[LMS-HANDOVER] sent {} fds (1 listener + {} conns) to {}", fds.size(),
+                    fds.size() - 1, unix_path));
+    ::close(us);
+}
+
+void LmsServer::detach_for_exit() {
+    // Quiesce WITHOUT touching the sockets: shutdown()/close on OUR copies of the
+    //   CONNECTION fds is harmless to the new owner (kernel-duped), but shutdown()
+    //   on the LISTENING socket would kill accepting for the dup too — so the
+    //   acceptor is woken with a self-connect instead, and connection fds are simply
+    //   left open. Held-stream pumps notice running_=false within one 250ms poll and
+    //   exit; request readers blocked in recv() linger until _exit() reaps the
+    //   process (the Conn objects are intentionally leaked with them).
+    if (!running_.exchange(false))
+        return;
+    if (listen_fd_ >= 0 && port_ > 0) { // self-connect: accept() returns, sees the flag
+        int w = ::socket(AF_INET, SOCK_STREAM, 0);
+        if (w >= 0) {
+            struct sockaddr_in a{};
+            a.sin_family = AF_INET;
+            a.sin_port = htons((uint16_t)port_);
+            a.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+            if (::connect(w, (struct sockaddr *)&a, sizeof(a)) == 0)
+                ::close(w); // accepted + dropped by the exiting accept loop
+            else
+                ::close(w);
+        }
+    }
+    if (accept_thread_.joinable())
+        accept_thread_.join();
+    {
+        std::lock_guard<std::mutex> lk(conns_mtx_);
+        for (auto &c : conns_)
+            if (c->listener && c->reader.joinable())
+                c->reader.join(); // pumps poll the flag; bounded
+    }
+    LOG("[LMS-HANDOVER] detached for exit (connection fds live in the new owner)");
+}
+
 bool LmsServer::start(const std::string &bind_addr, int port, RemoteControlInterface *control,
                       RemoteCommandBus *bus) {
     if (running_.load())
@@ -175,6 +366,50 @@ bool LmsServer::start(const std::string &bind_addr, int port, RemoteControlInter
 
     control_ = control;
     bus_ = bus;
+
+    // N10.5: a staged handover ADOPTS the previous owner's listener + live phone
+    //   connections instead of binding — the phone never saw a disconnect.
+    {
+        std::lock_guard<std::mutex> lk(g_stage_mtx);
+        if (g_stage_listen_fd >= 0) {
+            listen_fd_ = g_stage_listen_fd;
+            port_ = port;
+            bind_addr_ = bind_addr;
+            running_.store(true);
+            accept_thread_ = std::thread(&LmsServer::accept_loop, this);
+            for (auto &ac : g_stage_conns) {
+                auto c = std::make_unique<Conn>();
+                c->fd = ac.fd;
+                c->client_id = next_client_id_++;
+                c->authed.store(ac.authed);
+                c->bayeux_cid = ac.bayeux_cid;
+                c->listener = ac.listener;
+                Conn *raw = c.get();
+                if (ac.listener) {
+                    {
+                        std::lock_guard<std::mutex> lk2(listeners_mtx_);
+                        listeners_[ac.bayeux_cid] = raw;
+                    }
+                    // the pump continues on a fresh thread; the initial ack chunk was
+                    //   already flushed by the previous owner
+                    c->reader = std::thread([this, raw] {
+                        std::string last_push; // start fresh — next change re-pushes
+                        (void)last_push;
+                        listen_loop(raw);
+                    });
+                } else {
+                    c->reader = std::thread([this, raw] { client_loop(raw); });
+                }
+                conns_.push_back(std::move(c));
+            }
+            int adopted = (int)conns_.size();
+            g_stage_listen_fd = -1;
+            g_stage_conns.clear();
+            LOG(fmt::format("[LMS-HANDOVER] adopted listener + {} live connections", adopted));
+            return true;
+        }
+    }
+
     listen_fd_ = make_listen_fd(bind_addr, port);
     if (listen_fd_ < 0)
         return false;
@@ -1183,6 +1418,16 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
+    } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "handover") {
+        // N10.5 zero-drop takeover: the TUI asks us to hand our listener + live phone
+        //   connections to it (fds duplicated via SCM_RIGHTS; the phone never drops).
+        //   The transfer runs on a detached thread so this reply goes out first; the
+        //   TUI then stops us with systemctl for the usual clean-exit state flush.
+        std::string path = cmd[2];
+        std::thread([this, path]() { send_handover_fds(path); }).detach();
+        nlohmann::json r;
+        r["status"] = "ok";
+        return r;
     } else if (k == "panicast" && cmd.size() > 1 && (cmd[1] == "browse" || cmd[1] == "mode")) {
         // ── Remote library browse (Squeeze Client's main screen) ──────────────────
         //   The remote mirrors the TUI's CURRENT mode list: rows are display_list

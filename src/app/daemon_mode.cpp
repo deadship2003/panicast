@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 
 #include <curl/curl.h>
 #include <libxml/parser.h>
@@ -17,11 +18,14 @@
 #include <unistd.h>
 
 #include <fmt/format.h>
-#include <sys/socket.h>
 #include <netinet/in.h>
+#include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include "panicast/app/app.h"
 #include "panicast/config/ini_config.h"
+#include "panicast/net/lms_server.h"
 #include "panicast/core/logger.h"
 #include "panicast/core/paths.h"
 #include "panicast/parsers/xml_helpers.h"
@@ -135,22 +139,76 @@ int run_daemon() {
                              "exits.)\n");
         return 1;
     }
+    // N10.5 zero-drop restore: a TUI on its way out may hand its listener + live
+    //   phone connections to us. Listen on the boot socket for a few seconds; any
+    //   received fds are STAGED (LmsServer::start adopts them instead of binding).
+    {
+        const char *xdg = std::getenv("XDG_RUNTIME_DIR");
+        std::string dir = xdg && *xdg ? xdg : "/tmp";
+        std::string path = dir + "/panicast-daemon-hs.sock";
+        // The exiting TUI drops an INTENT marker right before `systemctl start` —
+        //   only then does a transfer actually come, so only then do we BLOCK (up to
+        //   10s) for it; otherwise a detached thread watches (≤10s) so boot is not
+        //   slowed by a wait that has no sender.
+        std::string intent = dir + "/panicast-handover.intent";
+        bool expect_transfer = ::access(intent.c_str(), F_OK) == 0;
+        ::unlink(path.c_str());
+        int ls = ::socket(AF_UNIX, SOCK_STREAM, 0);
+        if (ls >= 0) {
+            sockaddr_un addr{};
+            addr.sun_family = AF_UNIX;
+            strncpy(addr.sun_path, path.c_str(), sizeof(addr.sun_path) - 1);
+            if (::bind(ls, (sockaddr *)&addr, sizeof(addr)) == 0 && ::listen(ls, 1) == 0) {
+                auto receive_one = [ls]() {
+                    pollfd p{ls, POLLIN, 0};
+                    if (::poll(&p, 1, 10000) > 0) {
+                        int conn = ::accept(ls, nullptr, nullptr);
+                        if (conn >= 0) {
+                            int listen_fd = -1;
+                            std::vector<LmsAdoptedConn> conns;
+                            if (lms_recv_handover_msg(conn, listen_fd, conns) && listen_fd >= 0) {
+                                LmsServer::stage_handover(listen_fd, std::move(conns));
+                                LOG("[LMS-HANDOVER] boot-side: staged incoming fds");
+                            }
+                            ::close(conn);
+                        }
+                    }
+                };
+                if (expect_transfer)
+                    receive_one();
+                else
+                    std::thread(receive_one).detach();
+            }
+            if (expect_transfer) {
+                ::close(ls);
+                ::unlink(path.c_str());
+            } else {
+                // the detached thread owns ls + the socket file now; it cleans up:
+                // simplest is a short-lived janitor — close-on-exec not needed, let the
+                // thread close it after its window.
+                std::thread([ls, path]() {
+                    ::sleep(11);
+                    ::close(ls);
+                    ::unlink(path.c_str());
+                }).detach();
+            }
+        }
+        ::unlink(intent.c_str());
+    }
+
     // N10.4: an orphan/older-binary session can hold the mini-LMS port with NO pidfile
     //   (e.g. a TUI from before the pidfile existed). Starting beside it produced a
     //   ZOMBIE daemon — everything up except the very thing the phone connects to.
     //   Fail loudly instead; systemd's restart then self-heals once the port frees.
-    if (lms_port_in_use()) {
+    //   N10.5: SKIPPED when a handover was adopted — the exiting owner legitimately
+    //   still holds a dup of the listener while we take it over.
+    if (!LmsServer::handover_staged() && lms_port_in_use()) {
         std::fprintf(stderr,
                      "panicast --daemon: the mini-LMS port is already in use by "
                      "another process — likely an older panicast session without a pid file.\n"
                      "Exit it (check `panicast status` / running terminals) and try again.\n");
         return 1;
     }
-
-    // N09 → N10 migration: remove a stale panicastd.pid so daemon_pid_alive() can never
-    //   see two "running" pid files at once after an upgrade.
-    std::remove((Paths::get_data_dir() + "/panicastd.pid").c_str());
-
     // Same boot sequence as the TUI main (minus the terminal save — no terminal here).
     Paths::migrate_legacy();
     curl_global_init(CURL_GLOBAL_ALL);
