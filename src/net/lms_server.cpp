@@ -1553,6 +1553,11 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             err = "unknown mode";
         }
         if (!url.empty()) {
+            // META-7d: auto-fill for Google (user_code param)
+            if (mode == "youtube" && !code.empty()) {
+                std::string sep = url.find('?') != std::string::npos ? "&" : "?";
+                url += sep + "user_code=" + code;
+            }
             nlohmann::json link;
             link["text"] = "🔓 打开授权页完成登录 / open to authorize";
             link["weblink"] = url;
@@ -1739,11 +1744,21 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                         }
                     }
                     if (ylogin_cache_.valid) {
+                        // META-7d: embed user_code in the URL — Google's device page
+                        //   auto-fills it from the ?user_code= parameter (verified:
+                        //   accounts.google.com/device?user_code=X returns the code
+                        //   embedded in the page). User just taps → browser opens →
+                        //   code pre-filled → confirm.
+                        std::string url = ylogin_cache_.url;
+                        if (!ylogin_cache_.user_code.empty()) {
+                            url += (url.find('?') != std::string::npos ? "&" : "?");
+                            url += "user_code=" + ylogin_cache_.user_code;
+                        }
                         nlohmann::json row;
                         row["text"] = ylogin_cache_.user_code.empty()
                                           ? "🔓 Login Google (opens browser)"
-                                          : "🔓 Login · code: " + ylogin_cache_.user_code;
-                        row["weblink"] = ylogin_cache_.url;
+                                          : "🔓 Login · auto-code: " + ylogin_cache_.user_code;
+                        row["weblink"] = url;
                         loop.push_back(row);
                     } else {
                         nlohmann::json go;
