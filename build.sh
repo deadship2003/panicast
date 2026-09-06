@@ -208,32 +208,6 @@ install_deps() {
 }
 
 install_panicast() {
-    # Stop the running service BEFORE replacing the binary (an active daemon
-    #   holds the old inode; replacing mid-run leaves a zombie old version).
-    info "stopping running panicast service (if any)..."
-    systemctl --user stop panicast 2>/dev/null
-    systemctl stop panicast 2>/dev/null
-    # Also stop any manual daemon (pidfile-based)
-    if [ -f "$HOME/.local/share/panicast/panicast-daemon.pid" ]; then
-        local dpid
-        dpid=$(cat "$HOME/.local/share/panicast/panicast-daemon.pid" 2>/dev/null)
-        if [ -n "$dpid" ] && kill -0 "$dpid" 2>/dev/null; then
-            kill "$dpid" 2>/dev/null
-            sleep 1
-        fi
-        rm -f "$HOME/.local/share/panicast/panicast-daemon.pid"
-    fi
-    # Kill any TUI holding the engine (it would block the service restart)
-    if [ -f "$HOME/.local/share/panicast/panicast-tui.pid" ]; then
-        local tpid
-        tpid=$(cat "$HOME/.local/share/panicast/panicast-tui.pid" 2>/dev/null)
-        if [ -n "$tpid" ] && kill -0 "$tpid" 2>/dev/null; then
-            kill "$tpid" 2>/dev/null
-            sleep 1
-        fi
-        rm -f "$HOME/.local/share/panicast/panicast-tui.pid"
-    fi
-
     info "installing panicast to /usr/local/bin (system-wide — sudo required, may prompt for password)"
     if sudo cmake --install build 2>/dev/null; then
         say "installed -> /usr/local/bin/panicast"
@@ -253,12 +227,8 @@ install_panicast() {
         say "removed legacy binary -> /usr/local/bin/panicastd"
     fi
     install_daemon_units
-
-    # Restart the service with the new binary
-    info "restarting panicast service with the new binary..."
-    systemctl --user start panicast 2>/dev/null && \
-        say "service restarted (panicast.service)" || \
-        warn "could not auto-restart service — run: panicast start"
+    echo
+    echo -e "${YELLOW}⚠ Restart required:${NC} panicast restart   (or: systemctl --user restart panicast)"
 }
 
 # N10.3: the daemon is a USER-space unit (~/.config/systemd/user/panicast.service) —
@@ -346,6 +316,12 @@ build_native() {  # native build for the host arch
     [ -x build/panicast ] || die "build/panicast 不存在 — 已中止安装"
     build_source_state > build/.build-source-stamp
     echo -e "${GREEN}✓ 完成: build/panicast${NC}"
+    if [ "$MODE" != "install" ]; then
+        echo
+        echo -e "Binary: ${BLUE}build/panicast${NC}"
+        echo -e "Install: ${YELLOW}sudo cmake --install build${NC} (or: ./build.sh install)"
+        echo -e "Restart: ${YELLOW}panicast restart${NC}"
+    fi
     # Y01: libqrencode is optional. If absent, cmake warns and Y-mode QR login falls back to text.
     if ! pkg-config --exists libqrencode 2>/dev/null && [ ! -f /usr/include/qrencode.h ]; then
         echo -e "${YELLOW}⚠ 未检测到 libqrencode：Y 模式扫码登录将回退为纯文本 user_code（无 QR 图片）。${NC}"
