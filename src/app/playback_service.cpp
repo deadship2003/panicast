@@ -461,8 +461,16 @@ std::vector<std::string> PlaybackService::resolve_youtube_url(const std::string 
                 EVENT_LOG("YouTube nsig solver missing: pip install -U \"yt-dlp[default]\" "
                           "(or pip install yt-dlp-ejs) — every resolve fails fast without it");
             }
-            if (attempt < attempts)
-                EVENT_LOG(fmt::format("YouTube resolve retry {}/{}...", attempt, attempts));
+            if (attempt < attempts) {
+                // YT-fix2: YouTube rate-limits bursts through one proxy exit — an
+                //   immediate retry doubles the request density and deepens the block
+                //   (observed: 3-in-a-row failures inside one playback, then fine
+                //   minutes later). Back off progressively instead.
+                int backoff = 2 * attempt; // 2s, 4s, 6s...
+                EVENT_LOG(fmt::format("YouTube resolve retry {}/{} in {}s...", attempt, attempts,
+                                      backoff));
+                std::this_thread::sleep_for(std::chrono::seconds(backoff));
+            }
         }
     }
     // Y11: fetch soft subtitle (.vtt) when [youtube] sub_lang is set; append its path as urls[2].
