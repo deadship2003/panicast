@@ -1161,7 +1161,10 @@ nlohmann::json LmsServer::status_data(int start, int window) {
         }
         r["item_loop"] = loop;
     }
-    // The queue in LMS's flat spelling (kept for old-Squeezer SongListener / CLI parity).
+    // The queue in LMS's flat spelling — the MINI-PLAYER BAR reads from
+    //   playlist_loop[0] (title / artist / album / artwork_url), NOT from
+    //   item_loop. Missing these fields is exactly why the bar shows
+    //   "Unknown track / Unknown artist / Unknown album".
     nlohmann::json loop = nlohmann::json::array();
     for (size_t i = 0; i < s.playlist.size() && i < 200; ++i) {
         nlohmann::json it;
@@ -1169,6 +1172,14 @@ nlohmann::json LmsServer::status_data(int start, int window) {
         it["id"] = std::to_string(i);
         it["title"] = s.playlist[i].title;
         it["duration"] = std::to_string(s.playlist[i].duration);
+        it["artist"] = !s.playlist[i].artist.empty() ? s.playlist[i].artist
+                                                     : (s.artist.empty() ? "panicast" : s.artist);
+        it["album"] = !s.playlist[i].album.empty() ? s.playlist[i].album
+                                                   : (s.album.empty() ? "panicast" : s.album);
+        if (!s.playlist[i].art_url.empty())
+            it["artwork_url"] = s.playlist[i].art_url;
+        else if (!s.art_url.empty())
+            it["artwork_url"] = s.art_url;
         loop.push_back(it);
     }
     r["playlist_loop"] = loop;
