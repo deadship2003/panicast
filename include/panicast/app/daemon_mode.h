@@ -28,8 +28,13 @@ bool daemon_pid_alive(int *out_pid = nullptr);
 //   racing it — mirroring what daemon_pid_alive() does for the daemon side.
 std::string tui_pidfile_path();
 
-// True when a TUI session owns the engine. Stale files (dead pid) read as false.
+// True when a TUI session owns the engine. Stale files (dead pid) read as false;
+//   a pid reused by an unrelated process also reads as false (auto-cleared).
 bool tui_pid_alive(int *out_pid = nullptr);
+
+// The controlling tty name of the TUI session pid ("" when unknown) — used in
+//   refusal messages so the user knows where the live session lives.
+std::string tui_session_tty(int pid);
 
 // Write/remove the TUI pidfile. write creates the data dir if needed.
 void write_tui_pidfile();

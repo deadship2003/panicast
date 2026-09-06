@@ -38,14 +38,30 @@ std::string daemon_pidfile_path() {
     return Paths::get_data_dir() + "/panicast-daemon.pid";
 }
 
+// META-6: pid-alive AND the pid still belongs to a panicast process. kill(pid,0)
+//   alone gives false positives when the pid got reused by an unrelated process
+//   after a crash — which would block startup forever with a misleading message.
+bool pid_is_panicast(int pid) {
+    std::ifstream c("/proc/" + std::to_string(pid) + "/comm");
+    std::string comm;
+    std::getline(c, comm);
+    return comm == "panicast";
+}
+
 bool daemon_pid_alive(int *out_pid) {
     std::ifstream f(daemon_pidfile_path());
     int pid = 0;
     if (!(f >> pid) || pid <= 0)
         return false; // no (valid) pid file → not running via daemon path
+    if (::kill(pid, 0) != 0)
+        return false; // ESRCH → stale file, daemon is gone
+    if (!pid_is_panicast(pid)) {
+        std::remove(daemon_pidfile_path().c_str()); // pid reused → stale
+        return false;
+    }
     if (out_pid)
         *out_pid = pid;
-    return ::kill(pid, 0) == 0; // ESRCH → stale file, daemon is gone
+    return true;
 }
 
 // ── TUI session ownership (N10.2) ────────────────────────────────────────────
@@ -59,9 +75,28 @@ bool tui_pid_alive(int *out_pid) {
     int pid = 0;
     if (!(f >> pid) || pid <= 0)
         return false;
+    if (::kill(pid, 0) != 0)
+        return false;
+    if (!pid_is_panicast(pid)) {
+        std::remove(tui_pidfile_path().c_str()); // pid reused → stale
+        return false;
+    }
     if (out_pid)
         *out_pid = pid;
-    return ::kill(pid, 0) == 0;
+    return true;
+}
+
+// Human-readable owner of a TUI session for refusal messages: "pid N (tty)" —
+//   tells the user WHERE the live session is instead of a bare pid.
+std::string tui_session_tty(int pid) {
+    char buf[128] = {0};
+    ssize_t n =
+        ::readlink(("/proc/" + std::to_string(pid) + "/fd/0").c_str(), buf, sizeof(buf) - 1);
+    if (n <= 0)
+        return "";
+    std::string t(buf, (size_t)n);
+    size_t p = t.rfind('/');
+    return p == std::string::npos ? t : t.substr(p + 1);
 }
 
 void write_tui_pidfile() {

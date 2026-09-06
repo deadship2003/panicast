@@ -32,10 +32,11 @@ static void print_usage() {
     std::cout << "By " << panicast::AUTHOR << " <" << panicast::EMAIL << "> @"
               << panicast::BUILD_TIME << "\n\n";
     std::cout << "Usage:\n";
-    std::cout << "  panicast                  Full engine TUI on a terminal (zero-drop\n";
-    std::cout << "                            takeover of the running service; hands it\n";
-    std::cout << "                            back on exit). Non-TTY → client controller\n";
-    std::cout << "  panicast --client         Lightweight client controller (no takeover)\n";
+    std::cout << "  panicast                  Client controller attaching to whatever\n";
+    std::cout << "                            owns the engine (service or first TUI);\n";
+    std::cout << "                            boots the full engine TUI when none runs\n";
+    std::cout << "  panicast --full           Force the engine TUI (zero-drop takeover of\n";
+    std::cout << "                            the current owner; hands it back on exit)\n";
     std::cout << "  panicast start|stop|restart|enable|disable   Manage the background\n";
     std::cout << "                            service (user systemd unit; no sudo needed)\n";
     std::cout << "  panicast status           Service + playback status\n";
@@ -288,12 +289,14 @@ int main(int argc, char *argv[]) {
         //   opens a local CLIENT TUI over its control plane — the service process
         //   is not touched at all (no takeover, no restart, phone keeps streaming).
         //   The standalone engine TUI (below) only boots when nothing is running.
-        // N10.7: interactive terminal → the FULL engine TUI: the N10.5 zero-drop
-        //   handover takes the sockets over (and back on exit), so Squeezer never
-        //   notices (verified live: listener + 9 conns adopted across a restart).
-        //   The lightweight client controller serves non-TTY invocations and --client.
-        if (panicast::daemon_pid_alive() && !force_full_tui &&
-            (force_client_tui || !isatty(STDIN_FILENO))) {
+        // N10.8 (user-final model): ONE process owns the engine — the background
+        //   service, or the first TUI started when no service ran. Every LATER
+        //   `panicast` ATTACHES as the lightweight client controller over that
+        //   owner's control plane (never blocked, any number of instances; works
+        //   against both a running service AND a TUI-hosted engine). The full
+        //   engine TUI only boots when NOTHING owns the engine, or with --full
+        //   (which then takes over via the N10.5 zero-drop handover).
+        if (!force_full_tui && (panicast::daemon_pid_alive() || panicast::tui_pid_alive())) {
             return panicast::run_client_tui();
         }
         // N10.3: FIRST-RUN AUTO-SERVICE — install/refresh the user-space unit before
@@ -305,8 +308,14 @@ int main(int argc, char *argv[]) {
         //   engine (mpv + queue + DB) has exactly one owner; a second TUI would race
         //   the first exactly like a second daemon would.
         if (int tui_pid = 0; panicast::tui_pid_alive(&tui_pid)) {
-            std::cerr << "panicast: another TUI session is already running (pid " << tui_pid
-                      << ") — exit it first." << std::endl;
+            std::string tty = panicast::tui_session_tty(tui_pid);
+            std::cerr << "panicast: another engine-TUI session is running (pid " << tui_pid
+                      << (tty.empty() ? "" : ", terminal " + tty)
+                      << ") — it owns mpv and the database, so a second one cannot start."
+                      << std::endl;
+            std::cerr << "Exit it there (q), or run `panicast --client` for a second, "
+                         "read-only view."
+                      << std::endl;
             return 1;
         }
         App app;
