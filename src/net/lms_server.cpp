@@ -1433,6 +1433,25 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   Nothing to push — acknowledge the subscribe so the app's serialized
         //   command queue keeps flowing.
         return nlohmann::json::object();
+    } else if (k == "panicast" && cmd.size() > 2 && (cmd[1] == "playmode" || cmd[1] == "speed")) {
+        // META-5: client-TUI convenience verbs — map straight onto existing actions.
+        const std::string &v = cmd[2];
+        if (cmd[1] == "playmode") {
+            if (v == "repeat")
+                push("repeat");
+            else if (v == "shuffle")
+                push("shuffle");
+            else
+                push("cycle");
+        } else {
+            if (v == "up")
+                push("speed_up");
+            else if (v == "down")
+                push("speed_down");
+            else
+                push("speed_reset");
+        }
+        return nlohmann::json::object();
     } else if (k == "panicast" && cmd.size() > 2 && cmd[1] == "mpv") {
         // META-5: client-TUI ':' box — raw mpv command passthrough (args joined).
         if (bus_ && cmd.size() > 2)

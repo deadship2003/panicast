@@ -62,11 +62,13 @@ struct LmsClient {
     }
 
     // Executes one slim command; returns the result object (empty on failure).
-    nlohmann::json slim(const std::vector<std::string> &cmd) const {
+    //   `tmo_sec` — polling uses a short budget so a busy daemon can never freeze
+    //   the UI; user-initiated actions (search/mode) get the full 6s.
+    nlohmann::json slim(const std::vector<std::string> &cmd, int tmo_sec = 6) const {
         int fd = ::socket(AF_INET, SOCK_STREAM, 0);
         if (fd < 0)
             return nlohmann::json::object();
-        timeval tv{6, 0};
+        timeval tv{tmo_sec, 0};
         ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         sockaddr_in a{};
@@ -154,6 +156,10 @@ std::vector<Row> rows_from_browse(const nlohmann::json &r) {
         size_t nl = text.find('\n');
         if (nl != std::string::npos)
             text.resize(nl);
+        // META-5: the virtual search-input row is dropped — the client has its own
+        //   's' key, and keeping it would shift every activation index by one.
+        if (text.rfind("🔍", 0) == 0)
+            continue;
         bool branch = text.find("▸") != std::string::npos;
         out.push_back({text, branch});
     }
@@ -262,13 +268,44 @@ int run_client_tui() {
         "+/-:vol  m:mute  ,/.:seek  q:quit";
 
     bool running = true;
+    auto run_search = [&]() {
+        // 's' — local text input → search_query on the daemon → replace the list
+        //   with the reply (same page shape the Squeezer input row produces).
+        echo();
+        curs_set(1);
+        int rows_n, cols_n;
+        getmaxyx(stdscr, rows_n, cols_n);
+        (void)rows_n;
+        mvaddstr(0, 0, " Search: ");
+        clrtoeol();
+        char buf[256] = {0};
+        timeout(-1); // blocking read while typing
+        mvgetnstr(0, 9, buf, sizeof(buf) - 1);
+        timeout(300);
+        noecho();
+        curs_set(0);
+        std::string q(buf);
+        while (!q.empty() && (q.back() == ' '))
+            q.pop_back();
+        if (q.empty())
+            return;
+        nlohmann::json r = st.lms.slim({"panicast", "search", q, "0", "400"});
+        if (r.contains("item_loop")) {
+            st.rows = rows_from_browse(r);
+            st.last_sig_seen = st.browse_sig; // the reply already reflects them
+            cursor = 0;
+            view_start = 0;
+        }
+        st.queue_view = false;
+    };
+
     while (running) {
         int rows_n, cols_n;
         getmaxyx(stdscr, rows_n, cols_n);
-        int list_h = std::max(1, rows_n - 3);
+        int list_h = std::max(1, rows_n - 4);
 
         erase();
-        // header: mode + view + play state
+        // header: mode + view
         attron(A_REVERSE);
         std::string head =
             " panicast·client · " + mode_label + (st.queue_view ? " · Queue" : " · List");
@@ -300,7 +337,7 @@ int run_client_tui() {
         if (items.empty())
             mvaddstr(1, 2, "(empty — switch mode with 1-9)");
 
-        // now-playing footer
+        // now-playing footer + two help lines
         std::string np = " " + (st.title.empty() ? std::string("—") : st.title);
         if (!st.artist.empty() && st.artist != "panicast")
             np += " — " + st.artist;
@@ -308,19 +345,21 @@ int run_client_tui() {
             np += "  [" + fmt_time(st.pos) + "/" + fmt_time(st.dur) + "]";
         np += "  vol:" + std::to_string(st.volume) + "%";
         attron(A_REVERSE);
-        mvaddnstr(rows_n - 2, 0, np.c_str(), cols_n - 1);
+        mvaddnstr(rows_n - 3, 0, np.c_str(), cols_n - 1);
         attroff(A_REVERSE);
-        mvaddnstr(rows_n - 1, 0, HELP, cols_n - 1);
-        mvaddstr(rows_n - 1, std::max(0, cols_n - 32), "client mode · --full = engine TUI");
+        mvaddnstr(rows_n - 2, 0,
+                  "Enter:open/play  BS:back  1-9:mode  Tab:queue  space:pause  n/p:track  "
+                  "+/-:vol  m:mute  ,/.:seek10s",
+                  cols_n - 1);
+        mvaddnstr(rows_n - 1, 0,
+                  "s:search  r:cycle R:repeat S:shuffle  x/z:X speed  L:subs  f:fav  "
+                  "d:download  q:quit",
+                  cols_n - 1);
         refresh();
 
-        // input / poll tick
+        // ── input: keys NEVER wait on the network (fire-and-forget commands);
+        //   state catches up on the next idle poll tick (≤300ms).
         int ch = getch();
-        auto activate = [&](const std::vector<std::string> &cmd) {
-            nlohmann::json r = st.lms.slim(cmd);
-            if (!st.queue_view && r.contains("item_loop"))
-                st.rows = rows_from_browse(r); // branch navigation reply = new page
-        };
         switch (ch) {
         case 'q':
         case 'Q':
@@ -351,17 +390,27 @@ int run_client_tui() {
             if (st.queue_view) {
                 st.lms.slim({"playlist", "index", std::to_string(cursor)});
             } else {
-                activate({"panicast", "browse", std::to_string(cursor), "0", "400"});
+                nlohmann::json r =
+                    st.lms.slim({"panicast", "browse", std::to_string(cursor), "0", "400"});
+                if (r.contains("item_loop"))
+                    st.rows = rows_from_browse(r); // branch nav reply = new page
             }
-            fetch_status(st);
             break;
         }
         case KEY_BACKSPACE:
         case 127:
-        case 'b':
-            if (!st.queue_view)
-                activate({"panicast", "browse", "back", "0", "400"});
+        case 'b': {
+            if (!st.queue_view) {
+                nlohmann::json r = st.lms.slim({"panicast", "browse", "back", "0", "400"});
+                if (r.contains("item_loop")) {
+                    st.rows = rows_from_browse(r);
+                    st.last_sig_seen = st.browse_sig;
+                    cursor = 0;
+                    view_start = 0;
+                }
+            }
             break;
+        }
         case '\t':
             st.queue_view = !st.queue_view;
             if (st.queue_view)
@@ -369,14 +418,9 @@ int run_client_tui() {
             cursor = 0;
             view_start = 0;
             break;
-        case ' ': {
-            nlohmann::json s = st.lms.slim({"status", "-", "1"});
-            bool paused = s.value("mode", "play") == "pause";
-            st.lms.slim(paused ? std::vector<std::string>{"pause", "0", ""}
-                               : std::vector<std::string>{"pause", "1"});
-            fetch_status(st);
+        case ' ':
+            st.lms.slim({"pause"});
             break;
-        }
         case 'n':
             st.lms.slim({"next"});
             break;
@@ -398,13 +442,45 @@ int run_client_tui() {
         case ',':
             st.lms.slim({"time", std::to_string(std::max(0, (int)st.pos - 10))});
             break;
+        case 's':
+            run_search();
+            break;
+        case 'r':
+            st.lms.slim({"panicast", "playmode", "cycle"});
+            break;
+        case 'R':
+            st.lms.slim({"panicast", "playmode", "repeat"});
+            break;
+        case 'S':
+            st.lms.slim({"panicast", "playmode", "shuffle"});
+            break;
+        case 'x':
+            st.lms.slim({"panicast", "speed", "up"});
+            break;
+        case 'z':
+            st.lms.slim({"panicast", "speed", "down"});
+            break;
+        case 'X':
+            st.lms.slim({"panicast", "speed", "reset"});
+            break;
+        case 'L':
+            st.lms.slim({"subtitle_toggle"});
+            break;
+        case 'f':
+            st.lms.slim({"favourite_toggle"});
+            break;
+        case 'd':
+            st.lms.slim({"download"});
+            break;
         default:
             if (ch >= '1' && ch <= '9') {
                 static const char *modes[] = {"RADIO",    "PODCAST", "FAVOURITE",
                                               "HISTORY",  "ONLINE",  "ACCOUNT",
                                               "BILIBILI", "TIKTOK",  "IPTV"};
                 const char *want = modes[ch - '1'];
-                activate({"panicast", "mode", want, "0", "400"});
+                nlohmann::json r = st.lms.slim({"panicast", "mode", want, "0", "400"});
+                if (r.contains("item_loop"))
+                    st.rows = rows_from_browse(r);
                 mode_label = fetch_mode_label(st);
                 cursor = 0;
                 view_start = 0;
@@ -412,14 +488,32 @@ int run_client_tui() {
             break;
         }
 
-        // poll tick: refresh footer + refetch the list when the daemon's moved
-        fetch_status(st);
-        if (!st.queue_view && st.browse_sig != st.last_sig_seen && !st.browse_sig.empty()) {
-            fetch_rows(st);
-            cursor = std::min(cursor, st.rows.empty() ? (size_t)0 : st.rows.size() - 1);
+        // idle poll tick (getch timed out): refresh footer; refetch the list only
+        // when the daemon's signature moved (mode switch / navigation elsewhere).
+        if (ch == ERR) {
+            nlohmann::json s = st.lms.slim({"status", "-", "1"}, 2);
+            if (!s.empty()) {
+                st.play_state = s.value("mode", st.play_state);
+                st.pos = s.value("time", st.pos);
+                st.dur = s.value("duration", st.dur);
+                st.volume = s.value("mixer volume", st.volume);
+                st.queue_count = s.value("playlist_tracks", st.queue_count);
+                st.queue_idx = s.value("playlist_cur_index", st.queue_idx);
+                const auto &item =
+                    s.contains("item_loop") && s["item_loop"].is_array() && !s["item_loop"].empty()
+                        ? s["item_loop"][0]
+                        : nlohmann::json::object();
+                st.title = item.value("track", st.title);
+                st.artist = item.value("artist", st.artist);
+                st.browse_sig = s.value("browse_sig", st.browse_sig);
+            }
+            if (!st.queue_view && !st.browse_sig.empty() && st.browse_sig != st.last_sig_seen) {
+                fetch_rows(st);
+                cursor = std::min(cursor, st.rows.empty() ? (size_t)0 : st.rows.size() - 1);
+            }
+            if (st.queue_view)
+                fetch_queue(st);
         }
-        if (st.queue_view)
-            fetch_queue(st);
     }
 
     endwin();
