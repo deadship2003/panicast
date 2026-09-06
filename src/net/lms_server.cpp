@@ -8,6 +8,7 @@
 #include "panicast/net/google_oauth.h"
 #include "panicast/core/logger.h"
 #include "panicast/net/remote_command_bus.h"
+#include "panicast/net/slim_discovery.h"
 
 #include <fmt/format.h>
 #include <fmt/ranges.h> // fmt::join (separate header since fmt 8; Arch's fmt needs it)
@@ -427,6 +428,10 @@ bool LmsServer::start(const std::string &bind_addr, int port, RemoteControlInter
                     bind_addr, port, port));
     LOG(fmt::format("[LMS] allowlist: {} | Basic auth: {}", allow_all_ ? "ALL sources" : allow_csv,
                     auth_required_ ? fmt::format("on (user '{}')", lms_user_) : "off"));
+
+    // META-7: start the Slim UDP discovery responder alongside the LMS server so
+    //   Squeezer's auto-scan finds every panicast host on the LAN.
+    SlimDiscovery::instance().start(port);
     return true;
 }
 
@@ -454,6 +459,7 @@ void LmsServer::stop() {
                 c->reader.join();
         conns_.clear();
     }
+    SlimDiscovery::instance().stop();
     LOG("[LMS] mini-LMS server stopped");
 }
 

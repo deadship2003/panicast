@@ -947,6 +947,12 @@ lms_port = 9090
 #   默认仅家庭网段 + 本机回环；Squeezer 手机需在此网段内 / default: home LAN + loopback only
 #   留空 = 允许任意源（不建议）/ empty = allow ALL sources (not recommended)
 lms_allow = 192.168.0.0/16,127.0.0.0/8
+# 服务器显示名（Squeezer 扫描列表里展示；空 = 主机名）/ display name in Squeezer's
+#   server picker (empty = hostname). 多台主机各设一个可区分的名字最有用。
+server_name =
+# 实例唯一 ID — 首次启动自动生成并回写，勿手工修改 / auto-generated on first
+#   boot, do not edit. Squeezer 用它区分不同 panicast 主机。
+# uuid =
 # 登录鉴权：Squeezer 设置里的 Username/Password 与此一致才可控制 / login auth: Squeezer's
 #   Username/Password fields must match these to control playback.
 #   默认 panicast/panicast（出厂凭据，装好即用）；改成自己的更安全 / default factory

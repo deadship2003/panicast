@@ -281,6 +281,7 @@ add_library(panicast_engine OBJECT
         src/core/paths.cpp
     src/app/cli_commands.cpp
     src/app/app_remote_admin.cpp
+    src/net/slim_discovery.cpp
     src/app/client_tui.cpp
     src/app/daemon_mode.cpp
     src/core/logger.cpp
