@@ -82,9 +82,9 @@ void MPVController::apply_mpv_options_(mpv_handle *ctx) {
         if (!mpv_hwdec.empty())
             mpv_set_option_string(ctx, "hwdec", mpv_hwdec.c_str());
     }
-    if (!mpv_ao.empty())
-        if (!mpv_ao.empty())
-            mpv_set_option_string(ctx, "ao", mpv_ao.c_str()); // empty = leave mpv default (auto)
+    // "auto"/empty = leave mpv's own detection; anything else is a user pin.
+    if (!mpv_ao.empty() && mpv_ao != "auto")
+        mpv_set_option_string(ctx, "ao", mpv_ao.c_str());
     std::string mpv_ytdl_format = IniConfig::instance().get_mpv_ytdl_format();
     init_ytdl_format_ = mpv_ytdl_format; // D50: snapshot for play_video() re-assertion
     mpv_set_option_string(ctx, "ytdl-format", mpv_ytdl_format.c_str());

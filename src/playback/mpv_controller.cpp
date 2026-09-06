@@ -162,10 +162,12 @@ bool MPVController::create_context_() {
     //   produce sound (mpv later emits AO_INIT_FAILED -14). AO-AUTO: with ao unpinned, mpv
     //   only COMMITS an output at first playback, so a null current-ao at init is normal —
     //   warn only when the user pinned a driver and even that didn't come up.
-    if ((!ao_actual || ao_actual[0] == '\0') &&
-        !IniConfig::instance().get("mpv", "ao", "").empty()) {
-        EVENT_LOG("MPV: pinned audio output failed to init (AO=null) — playback will fail "
-                  "silently. Check [mpv] ao / your audio server, then restart.");
+    {
+        // only a TRUE pin (non-auto) makes a null AO at init worth alarming about
+        std::string ao_cfg = IniConfig::instance().get("mpv", "ao", "");
+        if ((!ao_actual || ao_actual[0] == '\0') && !ao_cfg.empty() && ao_cfg != "auto")
+            EVENT_LOG("MPV: pinned audio output failed to init (AO=null) — playback will "
+                      "fail silently. Check [mpv] ao / your audio server, then restart.");
     }
     if (vo_actual)
         mpv_free((void *)vo_actual);

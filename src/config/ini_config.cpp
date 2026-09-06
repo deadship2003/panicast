@@ -731,9 +731,14 @@ vid = auto
 #     noisily on WSLg (no native pipewire) — hence the explicit default.
 #   pulse / pipewire / alsa / auto = force a specific driver/order
 # CLI: --ao=<val> overrides
-# 空 = mpv 自动选择音频输出(pipewire→pulse→alsa…,WSLg/原生通用)/ empty = mpv
-#   auto-detect audio output (works on both WSLg and native pipewire/pulse)
-ao =
+# 音频输出驱动 / audio output driver
+#   auto = mpv 自动探测(pipewire→pulse→alsa…,WSLg 与原生 Linux 通用)/ auto = mpv
+#   auto-detect (works on both WSLg and native pipewire/pulse)
+#   需要手工钉死时取消注释其一 / to pin manually, uncomment one of:
+#ao=pulse
+#ao=pipewire
+#ao=alsa
+ao = auto
 # yt-dlp format selection
 ytdl_format = bestvideo+bestaudio
 # HTTP User-Agent (some CDNs reject default mpv UA)
