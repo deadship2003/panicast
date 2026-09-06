@@ -195,6 +195,17 @@ private:
                                               //   mixer volume; mpv holds the
                                               //   real audio state)
 
+    // META-7c: cached Google device-code for the Y login row's weblink. Fetched
+    //   once when Y-mode root is built with no account; reused until expired.
+    //   Background poll is pushed via the bus alongside the weblink.
+    struct {
+        std::string url;
+        std::string user_code;
+        std::string device_code;
+        std::chrono::steady_clock::time_point fetched_at;
+        bool valid = false;
+    } ylogin_cache_;
+
     // N10.4: Bayeux clientId → held listen connection. Guarded by listeners_mtx_.
     std::mutex listeners_mtx_;
     std::map<std::string, Conn *> listeners_;

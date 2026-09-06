@@ -1718,16 +1718,38 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                 // META-6: login entry at the top of account-bearing modes (before
                 //   the search row) — tappable, opens the authorization page.
                 if (m == "ACCOUNT") { // Y only — B/T login stays in the TUI ('a' key)
-                    static const std::map<std::string, std::pair<const char *, const char *>>
-                        logins = {
-                            {"ACCOUNT", {"youtube", "🔓 Login Google"}},
-                        };
-                    auto it = logins.find(m);
-                    if (it != logins.end()) {
-                        nlohmann::json go;
-                        go["cmd"] = nlohmann::json::array({"panicast", "login", it->second.first});
+                    // META-7c: one-tap login — pre-fetch the device code (cached
+                    //   ~10 min) and put the auth URL as a weblink. Tapping the row
+                    //   opens the browser directly on the Google auth page.
+                    bool fresh = ylogin_cache_.valid &&
+                                 std::chrono::steady_clock::now() - ylogin_cache_.fetched_at <
+                                     std::chrono::seconds(600);
+                    if (!fresh) {
+                        auto dc = GoogleOAuth::request_device_code();
+                        if (dc.ok) {
+                            ylogin_cache_.url = dc.verification_url;
+                            ylogin_cache_.user_code = dc.user_code;
+                            ylogin_cache_.device_code = dc.device_code;
+                            ylogin_cache_.fetched_at = std::chrono::steady_clock::now();
+                            ylogin_cache_.valid = true;
+                            if (bus_) // start the background poll
+                                bus_->push({"_remote_login_youtube",
+                                            {dc.device_code, std::to_string(dc.interval)},
+                                            0});
+                        }
+                    }
+                    if (ylogin_cache_.valid) {
                         nlohmann::json row;
-                        row["text"] = it->second.second;
+                        row["text"] = ylogin_cache_.user_code.empty()
+                                          ? "🔓 Login Google (opens browser)"
+                                          : "🔓 Login · code: " + ylogin_cache_.user_code;
+                        row["weblink"] = ylogin_cache_.url;
+                        loop.push_back(row);
+                    } else {
+                        nlohmann::json go;
+                        go["cmd"] = nlohmann::json::array({"panicast", "login", "youtube"});
+                        nlohmann::json row;
+                        row["text"] = "🔓 Login Google";
                         row["actions"] = nlohmann::json({{"go", go}});
                         loop.push_back(row);
                     }
