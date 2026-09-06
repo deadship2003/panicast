@@ -426,7 +426,7 @@ if(MPV_FOUND)
     endif()
     message(STATUS "MPV: Found")
 else()
-    message(WARNING "MPV not found - media playback disabled")
+    message(FATAL_ERROR "MPV not found — REQUIRED for playback. Install: sudo apt install libmpv-dev")
 endif()
 
 # SQLite3
@@ -436,7 +436,7 @@ if(SQLITE3_LINK_LIB)
 elseif(SQLite3_FOUND)
     message(WARNING "SQLite3 found but no link target available")
 else()
-    message(WARNING "SQLite3 not found - database features disabled")
+    message(FATAL_ERROR "SQLite3 not found — REQUIRED. Install: sudo apt install libsqlite3-dev")
 endif()
 
 # CURL
@@ -448,7 +448,7 @@ if(CURL_FOUND)
     endif()
     message(STATUS "CURL: Found")
 else()
-    message(WARNING "CURL not found - network features disabled")
+    message(FATAL_ERROR "CURL not found — REQUIRED. Install: sudo apt install libcurl4-openssl-dev")
 endif()
 
 # libxml2
@@ -460,7 +460,7 @@ if(LibXml2_FOUND)
     endif()
     message(STATUS "libxml2: Found")
 else()
-    message(WARNING "libxml2 not found - RSS parsing disabled")
+    message(FATAL_ERROR "libxml2 not found — REQUIRED. Install: sudo apt install libxml2-dev")
 endif()
 
 # fmt
@@ -531,6 +531,18 @@ endforeach()
 # =============================================================================
 # Install
 # =============================================================================
+# META-8: JS runtime (quickjs from vendor/) — installed if present.
+#   Download once with: ./build.sh  (bootstrap step), then cmake --install
+#   deploys everything. Without quickjs, yt-dlp nsig solving fails.
+if(EXISTS "${CMAKE_SOURCE_DIR}/vendor/quickjs/qjs")
+    install(PROGRAMS "${CMAKE_SOURCE_DIR}/vendor/quickjs/qjs" DESTINATION bin)
+    message(STATUS "JS runtime: vendor/quickjs/qjs → bin (installed by cmake --install)")
+else()
+    message(WARNING "JS runtime not found (vendor/quickjs/qjs missing). "
+        "YouTube playback needs it. Download with: ./build.sh (first-time bootstrap), "
+        "or: curl -L github.com/quickjs-ng/quickjs/releases -o vendor/quickjs/qjs")
+endif()
+
 install(TARGETS panicast
     RUNTIME DESTINATION bin
 )
