@@ -1,4 +1,10 @@
+# NOTE: spawns <repo>/build/panicast (what ./build.sh produces). Override with
+#   PANICAST_BIN; the daemon under test must use an isolated HOME + [remote]
+#   lms_port = LMS_PORT.
 import base64, json, os, signal, socket, struct, subprocess, time
+BIN = os.environ.get(
+    "PANICAST_BIN",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "build", "panicast"))
 HOST, PORT = "127.0.0.1", 9190
 AUTH = base64.b64encode(b"panicast:panicast").decode()
 PLAYER = "00:00:00:00:84:21"
@@ -53,7 +59,7 @@ print("daemon A exited; phone conns alive (fd dups)")
 
 intent = "/run/user/%d/panicast-handover.intent" % os.getuid()
 open(intent, "w").close()
-b = subprocess.Popen(["/home/xx/panicast/build/panicast", "--daemon"], env=dict(os.environ, HOME=TH),
+b = subprocess.Popen([BIN, "--daemon"], env=dict(os.environ, HOME=TH),
                      stdout=open(f"{TH}/daemonB.out","w"), stderr=subprocess.STDOUT)
 hs_path = "/run/user/%d/panicast-daemon-hs.sock" % os.getuid()
 deadline = time.time() + 12

@@ -213,6 +213,7 @@ install_panicast() {
         say "installed -> /usr/local/bin/panicast"
     else
         warn "cmake --install failed, trying direct copy"
+        [ -x build/panicast ] || die "build/panicast 不存在 — 已中止安装"
         sudo cp -f build/panicast /usr/local/bin/panicast
         say "installed -> /usr/local/bin/panicast"
     fi
@@ -266,10 +267,52 @@ do_install() {
 }
 
 # ── Build ─────────────────────────────────────────────────────────────────────
+# ── 编译缓存新鲜度防护 ────────────────────────────────────────────────────────
+#   风险:git checkout/切换提交后,源文件 mtime 可能比 .o 旧 → ninja 判定"无需重建"
+#   → `install` 把过期二进制装进 /usr/local/bin。防护:成功构建时记录 git 状态戳
+#   (HEAD + 是否 dirty);下次构建若状态变了、而 ninja 干跑显示无事可做,则时间戳
+#   不可信 → touch 全部源码强制全量重建。正常编辑迭代不受影响(ninja 自有工作)。
+# Content-addressed source state: the WORKING TREE's tree sha (git stash create
+#   snapshots the dirty tree without touching anything; a clean tree uses HEAD's).
+#   Same content → same stamp (committing already-built sources does NOT force a
+#   rebuild); any content change → different stamp → freshness guard engages.
+build_source_state() {
+    local stash_tree
+    stash_tree="$(git stash create 2>/dev/null)"
+    if [ -n "$stash_tree" ]; then
+        git rev-parse "$stash_tree^{tree}" 2>/dev/null
+    else
+        git rev-parse "HEAD^{tree}" 2>/dev/null
+    fi
+}
+
+build_freshness_guard() {
+    [ -f build/panicast ] || return 0        # no binary yet — normal full build
+    command -v git >/dev/null || return 0    # non-git tree — mtime is all we have
+    local stamp_file=build/.build-source-stamp
+    local now_state
+    now_state="$(build_source_state)"
+    if [ -f "$stamp_file" ] && [ "$(cat "$stamp_file")" = "$now_state" ]; then
+        return 0
+    fi
+    # git state changed since the last successful build — is ninja about to no-op?
+    #   (ninja -n prints "ninja: no work to do." even when idle — filter it out)
+    local dry
+    dry="$(cmake --build build --parallel "$JOBS" -- -n 2>/dev/null || true)"
+    if [ -n "$(printf '%s' "$dry" | grep -v '^ninja: no work to do\.$')" ]; then
+        return 0   # ninja already sees real work — let mtime incremental proceed
+    fi
+    warn "git 状态变化但编译缓存判定无需重建(时间戳回退)— 强制全量重建"
+    find src include -name '*.cpp' -o -name '*.h' -o -name '*.hpp' 2>/dev/null | xargs -r touch
+}
+
 build_native() {  # native build for the host arch
     echo -e "\n${BLUE}[${HOST_ARCH}] 编译中...${NC}"
-    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-    cmake --build build --parallel "$JOBS"
+    build_freshness_guard
+    cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release || die "CMake 配置失败 — 已中止(绝不安装过期二进制)"
+    cmake --build build --parallel "$JOBS" || die "编译失败 — 已中止(build/panicast 是旧文件,绝不安装)"
+    [ -x build/panicast ] || die "build/panicast 不存在 — 已中止安装"
+    build_source_state > build/.build-source-stamp
     echo -e "${GREEN}✓ 完成: build/panicast${NC}"
     # Y01: libqrencode is optional. If absent, cmake warns and Y-mode QR login falls back to text.
     if ! pkg-config --exists libqrencode 2>/dev/null && [ ! -f /usr/include/qrencode.h ]; then

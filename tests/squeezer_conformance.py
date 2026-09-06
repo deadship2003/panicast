@@ -14,7 +14,12 @@ import json
 import socket
 import sys
 
-HOST, PORT = "127.0.0.1", 9190
+# NOTE: ./build.sh puts the executable at <repo>/build/panicast (install copies it to
+#   /usr/local/bin). Point tests at a SPECIFIC binary with PANICAST_BIN; the daemon
+#   under test must listen on LMS_HOST:LMS_PORT (isolated HOME + [remote] lms_port).
+import os
+HOST = os.environ.get("LMS_HOST", "127.0.0.1")
+PORT = int(os.environ.get("LMS_PORT", "9190"))
 AUTH = base64.b64encode(b"panicast:panicast").decode()
 PLAYER = "00:00:00:00:84:21"
 passed, failed = 0, 0
