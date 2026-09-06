@@ -19,6 +19,8 @@
 #include <sys/un.h>
 #include <unistd.h>
 
+#include <fmt/format.h>
+
 #include "panicast/app/daemon_mode.h"
 #include "panicast/config/ini_config.h"
 #include "panicast/core/paths.h"
@@ -419,29 +421,28 @@ void ensure_user_unit() {
     //   and WSLg maintains it as a symlink into /mnt/wslg (verified: pactl connects
     //   through it with PULSE_SERVER unset). Hardcoding PULSE_SERVER here once pointed
     //   Arch at a nonexistent WSLg path → AO=null → silent playback.
-    // Unit assembly via += (no chained-literal expression that a stray edit can
-    //   orphan — the previous chain got truncated mid-way and silently wrote a
-    //   one-line stub unit; GCC's -Wunused-result warning was the tell).
-    std::string unit;
-    unit += "# panicast user-space service (installed automatically by the first run — ";
-    unit += "N10.3).\n";
-    unit += "#   Manage with: panicast start|stop|restart|enable|disable (all sudo-free, ";
-    unit += "systemctl --user).\n";
-    unit += "[Unit]\n";
-    unit += "Description=panicast headless media daemon (Squeeze Client remote)\n";
-    unit += "After=network.target\n";
-    unit += "\n";
-    unit += "[Service]\n";
-    unit += "Type=simple\n";
-    unit += "ExecStart=" + exe + " --daemon\n";
-    unit += "WorkingDirectory=" + std::string(home ? home : "") + "\n";
-    unit += "Restart=on-failure\n";
-    unit += "RestartSec=3\n";
-    unit += "# The daemon's clean shutdown (mpv stop joins) takes ~2-3s.\n";
-    unit += "TimeoutStopSec=15\n";
-    unit += "\n";
-    unit += "[Install]\n";
-    unit += "WantedBy=default.target\n";
+    // The unit body as a raw string — reads exactly like the file on disk, and the
+    //   {} slots make it a single literal token that cannot be orphaned by an edit.
+    std::string unit = fmt::format(
+        R"(# panicast user-space service (installed automatically by the first run — N10.3).
+#   Manage with: panicast start|stop|restart|enable|disable (all sudo-free, systemctl --user).
+[Unit]
+Description=panicast headless media daemon (Squeeze Client remote)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart={} --daemon
+WorkingDirectory={}
+Restart=on-failure
+RestartSec=3
+# The daemon's clean shutdown (mpv stop joins) takes ~2-3s.
+TimeoutStopSec=15
+
+[Install]
+WantedBy=default.target
+)",
+        exe, std::string(home ? home : ""));
     std::string path = dir + "/" + UNIT;
     std::string existing;
     {
