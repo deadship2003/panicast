@@ -854,10 +854,10 @@ nlohmann::json LmsServer::status_data(int start, int window) {
         //   now-playing item from it).
         nlohmann::json item;
         item["id"] = idx;
-        item["track"] = s.title;
+        item["track"] = s.title.empty() ? "Live stream" : s.title;
         item["title"] = s.title;
-        item["artist"] = "";
-        item["album"] = "";
+        item["artist"] = s.artist.empty() ? "panicast" : s.artist;
+        item["album"] = s.album.empty() ? "panicast" : s.album;
         item["duration"] = s.duration;
         if (!s.art_url.empty()) {
             item["icon"] = s.art_url;
@@ -882,8 +882,8 @@ nlohmann::json LmsServer::status_data(int start, int window) {
             it["id"] = (int)i;
             it["track"] = s.playlist[i].title;
             it["text"] = s.playlist[i].title;
-            it["artist"] = "";
-            it["album"] = "";
+            it["artist"] = s.artist.empty() ? "panicast" : s.artist;
+            it["album"] = s.album.empty() ? "panicast" : s.album;
             it["duration"] = s.playlist[i].duration;
             nlohmann::json go;
             go["cmd"] = nlohmann::json::array({"playlist", "index", std::to_string(i)});
@@ -1292,7 +1292,14 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                     go["cmd"] = nlohmann::json::array({"panicast", "browse", "back"});
                 } else {
                     const auto &row = rows[not_root ? p - 1 : p];
-                    it["text"] = row.subtext.empty() ? row.title : row.title + "\n" + row.subtext;
+                    // Depth indent + branch marker: the flat mirror carries depth — show
+                    //   it, or an expanded tree reads as one undifferentiated list.
+                    std::string text(row.depth * 2, ' ');
+                    text += row.is_branch ? "▸ " : "";
+                    text += row.title;
+                    if (!row.subtext.empty())
+                        text += "\n" + row.subtext;
+                    it["text"] = text;
                     if (!row.art_url.empty())
                         it["icon"] = row.art_url;
                     go["cmd"] = nlohmann::json::array(
@@ -1321,18 +1328,22 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
         //   switches the TUI too — both frontends share one engine by design.
         //   node MUST be "home" on every entry: release builds (2.4) render the home
         //   screen by filtering on node == "home" — anything else never shows.
-        static const std::vector<std::string> modes = {
-            "RADIO",   "PODCAST",  "FAVOURITE", "HISTORY", "ONLINE",
-            "ACCOUNT", "BILIBILI", "TIKTOK",    "IPTV",
+        // Internal name (sent in the go cmd) + display label — Y mode is labelled the
+        //   way the TUI user knows it, not as the internal "ACCOUNT".
+        static const std::vector<std::pair<std::string, const char *>> modes = {
+            {"RADIO", "Radio"},           {"PODCAST", "Podcasts"},  {"FAVOURITE", "Favourites"},
+            {"HISTORY", "History"},       {"ONLINE", "Online (O)"}, {"ACCOUNT", "YouTube (Y)"},
+            {"BILIBILI", "Bilibili (B)"}, {"TIKTOK", "TikTok (T)"}, {"IPTV", "IPTV"},
         };
         int weight = 1;
-        for (const auto &m : modes) {
+        for (const auto &mi : modes) {
+            const std::string &m = mi.first;
             nlohmann::json go;
             go["cmd"] = nlohmann::json::array({"panicast", "mode", m});
             nlohmann::json item;
             item["id"] = "mode-" + m;
             item["node"] = "home";
-            item["text"] = (m == mode_name ? "▶ " : "") + m;
+            item["text"] = std::string(m == mode_name ? "▶ " : "") + mi.second;
             item["weight"] = weight++;
             item["actions"] = nlohmann::json({{"go", go}});
             loop.push_back(item);

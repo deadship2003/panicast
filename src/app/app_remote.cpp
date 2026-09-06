@@ -151,6 +151,19 @@ void App::update_remote_state_cache() {
         s.url = ps.current_url;
         s.has_video = ps.has_video;
     }
+    // ART-2: display metadata — the app shows "unknown artist/album" for blanks, so
+    //   always provide a source name (parent feed/station/channel) + a mode context.
+    {
+        std::string src_name;
+        if (TreeNodePtr pn = playback_.playback_node()) {
+            if (TreeNodePtr par = pn->parent.lock())
+                src_name = par->title;
+            if (src_name.empty())
+                src_name = pn->channel_name;
+        }
+        s.artist = src_name.empty() ? "panicast" : src_name;
+        s.album = "panicast · " + s.mode;
+    }
     s.playlist_pos = ps.playlist_pos;
     s.playlist_count = ps.playlist_count;
     s.net_speed_bps = ps.net_speed_bps;

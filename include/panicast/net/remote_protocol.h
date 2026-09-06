@@ -58,8 +58,13 @@ struct RemoteStateSnapshot {
     // Current-mode display list (see RemoteBrowseItem) + a cheap change signature the
     //   LMS server polls to detect navigation (browse open/back waits for a list change).
     std::vector<RemoteBrowseItem> browse;
-    std::string browse_sig;   // FNV over mode + depth + titles; differs → list changed
-    std::string art_url;      // cover art (TreeNode::art_url of the playing node)
+    std::string browse_sig; // FNV over mode + depth + titles; differs → list changed
+    std::string art_url;    // cover art (TreeNode::art_url of the playing node)
+    // ART-2: display metadata for the remote's now-playing/playlist rows. The app
+    //   renders "unknown artist/album" for BLANK fields — fill them with the source's
+    //   name (parent feed/station/channel) and a mode context instead.
+    std::string artist;       // source name (feed / station / channel)
+    std::string album;        // "panicast · <MODE>"
     int sleep_remaining = -1; // -1 = sleep timer inactive
     bool subtitle_active = false;
 };
