@@ -32,8 +32,7 @@ public:
     void setSession(const std::string &cookieHeader, const std::string &userAgent = "");
 
     // ── 接口A: query/user — get the logged-in user's own numeric uid ───────
-    void fetchMyUserId(std::function<void(const std::string &userId,
-                                          const std::string &err)> cb);
+    void fetchMyUserId(std::function<void(const std::string &userId, const std::string &err)> cb);
 
     // ── 接口A2: profile/other — get the logged-in user's nickname + sec_uid ─
     struct MyProfile {
@@ -47,10 +46,10 @@ public:
 
     // ── 接口B: following/list — one page of followed UP masters ────────────
     struct FollowingUser {
-        std::string uid;        // numeric uid
-        std::string secUid;     // MS4w... stable id (for fetchUserVideos later)
-        std::string nickname;   // display name (昵称)
-        std::string signature;  // bio (简介)
+        std::string uid;       // numeric uid
+        std::string secUid;    // MS4w... stable id (for fetchUserVideos later)
+        std::string nickname;  // display name (昵称)
+        std::string signature; // bio (简介)
         int followerCount = 0;
         std::string avatarUrl;
     };
@@ -69,9 +68,9 @@ public:
     // Expanding a subscribed-UP node calls this with the UP's sec_uid. Returns video entries
     // with play_addr CDN direct links (mpv can play directly).
     struct UserVideo {
-        std::string awemeId;  // stable video id
-        std::string desc;     // title/description
-        std::string playUrl;  // CDN direct link (play_addr.url_list[0])
+        std::string awemeId; // stable video id
+        std::string desc;    // title/description
+        std::string playUrl; // CDN direct link (play_addr.url_list[0])
         int duration = 0;
         std::string coverUrl;
     };
@@ -79,9 +78,14 @@ public:
         bool ok = false;
         std::vector<UserVideo> videos;
         bool hasMore = false;
-        long long nextCursor = 0;  // max_cursor for the next page
+        long long nextCursor = 0; // max_cursor for the next page
         std::string err;
     };
+
+    // META-6: general keyword search (T-mode 🔍). Same result shape as
+    //   fetchUserVideos (UserVideo), one page.
+    void searchKeyword(const std::string &keyword, int offset, int count,
+                       std::function<void(const UserVideoResult &)> cb);
     void fetchUserVideos(const std::string &secUserId, long long maxCursor, int count,
                          std::function<void(const UserVideoResult &)> cb);
 
@@ -96,8 +100,7 @@ public:
 
     // ── 合集辅助: 取某 UP 首个含 mix_info 的视频的 mix_id ─────────────────────
     void fetchFirstMixId(const std::string &secUserId,
-                         std::function<void(const std::string &mixId,
-                                            const std::string &err)> cb);
+                         std::function<void(const std::string &mixId, const std::string &err)> cb);
 
     // ── 扫码登录（终端二维码，纯 API）───────────────────────────────────────────
     // Douyin 登录端点（sso.douyin.com）不走 X-Bogus 签名；用 curl 的 cookie jar 直连，
@@ -110,9 +113,9 @@ public:
         std::string err;
     };
     struct LoginResult {
-        bool ok = false;         // 登录成功（sessionid 已写入 cookie jar）
-        std::string sessionid;   // 登录态凭据（非空 = 已登录）
-        int code = 0;            // 轮询状态：1=未扫 2=已扫待确认 3=成功
+        bool ok = false;       // 登录成功（sessionid 已写入 cookie jar）
+        std::string sessionid; // 登录态凭据（非空 = 已登录）
+        int code = 0;          // 轮询状态：1=未扫 2=已扫待确认 3=成功
         std::string err;
     };
     LoginQR request_qrcode();
@@ -128,7 +131,7 @@ private:
     std::string computeXBogus(const std::string &urlParams) const;
     static std::vector<unsigned char> rc4(const std::vector<unsigned char> &key,
                                           const std::vector<unsigned char> &data);
-    static std::vector<unsigned char> md5Raw(const std::string &data);  // → 16 bytes
+    static std::vector<unsigned char> md5Raw(const std::string &data); // → 16 bytes
     static std::vector<int> md5StrToArray(const std::string &s);
     static std::string md5Hex(const std::string &s);
     static std::string md5HexOfArray(const std::vector<int> &data);

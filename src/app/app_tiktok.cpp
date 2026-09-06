@@ -16,6 +16,7 @@
 #include "panicast/config/ini_config.h"
 #include "panicast/core/event_log.h"
 #include "panicast/core/logger.h"
+#include "panicast/core/paths.h"
 #include "panicast/net/douyin_api.h"
 #include "panicast/net/tiktok_region.h"
 #include "panicast/net/ytdlp_runner.h"
@@ -137,8 +138,7 @@ static std::string probe_tiktok_uname(const std::string &url, const std::string 
             } catch (...) {
             }
         },
-        60,
-        url);
+        60, url);
     return uname;
 }
 
@@ -154,9 +154,8 @@ TreeNodePtr App::parse_tiktok_user_videos(const std::string &url, const std::str
     constexpr int MAX_ATTEMPTS = 3;
     for (int attempt = 1; attempt <= MAX_ATTEMPTS; ++attempt) {
         lines.clear();
-        auto r =
-            YtdlpRunner::run(args, [&](const std::string &line) { lines.push_back(line); }, 30,
-                             url);
+        auto r = YtdlpRunner::run(
+            args, [&](const std::string &line) { lines.push_back(line); }, 30, url);
         if (!lines.empty())
             break;
         // Empty output — retry once more after backoff (challenge cookie / transient block).
@@ -224,8 +223,8 @@ void App::tiktok_subscribe(const std::string &input) {
             pool_.submit([this, handle, url]() {
                 TiktokAccount a{0, "douyin", handle, url, ""};
                 int id = save_tiktok_account(a);
-                EVENT_LOG(fmt::format("T: saved Douyin creator {} ({})", handle,
-                                      id ? "ok" : "failed"));
+                EVENT_LOG(
+                    fmt::format("T: saved Douyin creator {} ({})", handle, id ? "ok" : "failed"));
                 library_.load_tiktok_root();
             });
         }
@@ -254,8 +253,7 @@ void App::start_douyin_login() {
     auto qr = api.request_qrcode();
     if (!qr.ok) {
         LOG(fmt::format("[Douyin] QR request failed: {}", qr.err));
-        EVENT_LOG(fmt::format("T: Douyin login failed — {}",
-                              qr.err.empty() ? "no token" : qr.err));
+        EVENT_LOG(fmt::format("T: Douyin login failed — {}", qr.err.empty() ? "no token" : qr.err));
         return;
     }
 
@@ -439,8 +437,70 @@ void App::tiktok_direct_input() {
         tiktok_subscribe(input); // shared with 'a'
         return;
     }
+    // META-6: bare keyword → Douyin signed keyword search (DouyinApi). TikTok region
+    //   keeps the old prompt (overseas TikTok has no anonymous keyword API).
+    if (TikTokRegion::current() == "CN") { // Douyin — has the signed keyword API
+        run_tiktok_keyword_search(input);
+        return;
+    }
     EVENT_LOG("T: anonymous keyword search unavailable TikTok/Douyin, enter @user / #tag / URL (or "
               "use 'a' add)");
+}
+
+// META-6: keyword search via DouyinApi::searchKeyword. Results become a search-record
+//   node at the T root (same shape as O/B/Y search history) — the remote browse and
+//   the TUI both see it via the ordinary tree mirror.
+void App::run_tiktok_keyword_search(const std::string &query) {
+    EVENT_LOG(fmt::format("T: searching Douyin for '{}'", query));
+    pool_.submit([this, query]() {
+        auto api = std::make_unique<DouyinApi>();
+        // session cookies (may be empty — ttwid bootstrap often still works)
+        std::string ck = Paths::get_data_dir() + "/douyin_cookie.txt";
+        api->setSession(DouyinApi::build_cookie_header_from_txt(ck, "douyin.com"));
+        api->searchKeyword(query, 0, 20, [this, query](const DouyinApi::UserVideoResult &r) {
+            if (!r.ok) {
+                EVENT_LOG(fmt::format("T: Douyin search failed — {}", r.err));
+                return;
+            }
+            // Build the record node: title = query, children = video leaves.
+            auto rec = std::make_shared<TreeNode>();
+            rec->title = "🔍 " + query;
+            rec->subtext = fmt::format("{} results", r.videos.size());
+            rec->type = NodeType::FOLDER;
+            rec->children_loaded = true;
+            int vt = 0;
+            for (const auto &v : r.videos) {
+                if (v.playUrl.empty())
+                    continue;
+                auto ep = std::make_shared<TreeNode>();
+                ep->type = NodeType::PODCAST_EPISODE;
+                ep->title = v.desc.empty() ? v.awemeId : v.desc;
+                ep->url = v.playUrl;
+                ep->duration = v.duration / 1000; // ms → s
+                ep->art_url = v.coverUrl;
+                ep->artist = query; // search-term context as artist
+                ep->album = "Douyin";
+                ep->track_num = ++vt;
+                ep->children_loaded = true;
+                ep->parent = rec;
+                rec->children.push_back(ep);
+            }
+            {
+                std::lock_guard<std::recursive_mutex> lock(library_.tree_mutex());
+                auto &root = library_.tiktok_root();
+                // replace an existing record with the same title, then front-insert
+                for (size_t i = 0; i < root.size(); ++i) {
+                    if (root[i]->title == rec->title) {
+                        root.erase(root.begin() + (long)i);
+                        break;
+                    }
+                }
+                rec->parent.reset();
+                root.insert(root.begin(), rec);
+            }
+            EVENT_LOG(fmt::format("T: Douyin search '{}' — {} videos", query, vt));
+        });
+    });
 }
 
 } // namespace panicast

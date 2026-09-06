@@ -1687,7 +1687,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             if (window > 0 && from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
                 int virt = 0;
-                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT")
+                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK")
                     virt += 1; // search row
                 if (m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK")
                     virt += 1; // login row
@@ -1720,7 +1720,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
                         loop.push_back(row);
                     }
                 }
-                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT") {
+                if (m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK") {
                     nlohmann::json do_cmd =
                         nlohmann::json::array({"panicast", "search", "__INPUT__"});
                     nlohmann::json row;
@@ -1771,7 +1771,7 @@ nlohmann::json LmsServer::json_slim_request(Conn &c, const std::vector<std::stri
             bool search_row = false, login_row = false;
             if (from == 0 && control_) {
                 std::string m = control_->snapshot_state().mode;
-                search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT";
+                search_row = m == "ONLINE" || m == "BILIBILI" || m == "ACCOUNT" || m == "TIKTOK";
                 login_row = m == "ACCOUNT" || m == "BILIBILI" || m == "TIKTOK";
             }
             r["count"] = (int)total + (search_row ? 1 : 0) +

@@ -239,6 +239,8 @@ private:
     // META-4: query-taking core behind perform_online_search — also the remote
     //   (Squeezer input box) entry for O-mode searches.
     void run_online_search(const std::string &query);
+    // META-6: Douyin signed keyword search (T-mode bare keyword / remote 🔍).
+    void run_tiktok_keyword_search(const std::string &query);
     // META-6: remote-admin surface (login flows + shared post-auth bodies).
     //   start_remote_login returns the authorization URL immediately and finishes
     //   on the pool; "tiktok" is a reserved slot (err="reserved").

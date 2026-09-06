@@ -7,6 +7,8 @@
 // All methods are synchronous curl calls — run them on a worker thread (they block on the network).
 #include "panicast/net/douyin_api.h"
 
+#include "panicast/core/utils.h" // Utils::url_encode (META-6 search)
+
 #include <algorithm>
 #include <chrono>
 #include <cstring>
@@ -537,6 +539,55 @@ void DouyinApi::fetchUserVideos(const std::string &secUserId, long long maxCurso
         out.hasMore = j.value("has_more", 0) != 0;
         out.nextCursor = j.value("max_cursor", maxCursor);
         for (const auto &aw : j.value("aweme_list", json::array())) {
+            UserVideo v;
+            v.awemeId = aw.value("aweme_id", "");
+            v.desc = aw.value("desc", "");
+            auto video = aw.value("video", json::object());
+            v.duration = video.value("duration", 0);
+            auto play = video.value("play_addr", json::object()).value("url_list", json::array());
+            if (!play.empty())
+                v.playUrl = play[0].get<std::string>();
+            auto cover = video.value("cover", json::object()).value("url_list", json::array());
+            if (!cover.empty())
+                v.coverUrl = cover[0].get<std::string>();
+            out.videos.push_back(std::move(v));
+        }
+        out.ok = true;
+    } catch (const std::exception &e) {
+        out.err = std::string("parse: ") + e.what();
+    }
+    cb(out);
+}
+
+// META-6: general keyword search — /aweme/v1/web/search/item/, same signed GET
+//   pipeline and result parsing as fetchUserVideos.
+void DouyinApi::searchKeyword(const std::string &keyword, int offset, int count,
+                              std::function<void(const UserVideoResult &)> cb) {
+    UserVideoResult out;
+    std::string params = "device_platform=webapp&aid=6383&channel=channel_pc_web"
+                         "&search_source=normal_search&type=1&keyword=" +
+                         Utils::url_encode(keyword) + "&start=" + std::to_string(offset) +
+                         "&count=" + std::to_string(count) +
+                         "&cookie_enabled=true&screen_width=1920&screen_height=1080"
+                         "&browser_language=zh-CN&browser_platform=Win32&browser_name=Chrome"
+                         "&browser_version=150.0.0.0&browser_online=true&engine_name=Blink"
+                         "&engine_version=150.0.0.0&os_name=Windows&os_version=10";
+    std::string body = signedGet("/aweme/v1/web/search/item/", params, out.err);
+    if (body.empty()) {
+        if (out.err.empty())
+            out.err = "empty response";
+        cb(out);
+        return;
+    }
+    try {
+        auto j = json::parse(body);
+        // Search replies carry data[] with aweme_info inside (not a flat aweme_list).
+        auto entries = j.contains("data") && j["data"].is_array() ? j["data"] : json::array();
+        out.hasMore = j.value("has_more", 0) != 0;
+        for (const auto &e : entries) {
+            auto aw = e.contains("aweme_info") ? e["aweme_info"] : json::object();
+            if (aw.empty())
+                continue;
             UserVideo v;
             v.awemeId = aw.value("aweme_id", "");
             v.desc = aw.value("desc", "");
