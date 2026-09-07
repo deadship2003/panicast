@@ -40,16 +40,11 @@ std::string tui_session_tty(int pid);
 void write_tui_pidfile();
 void remove_tui_pidfile();
 
-// True when a live process holds the mini-LMS listen port ([remote] lms_port) while
-//   no daemon pidfile names a live daemon — i.e. an orphan/older-binary panicast
-//   session owns the engine without a pidfile. Starting beside it would produce a
-//   zombie daemon (LMS bind fails, everything else runs).
-bool lms_port_in_use();
-
 // Foreground headless mode behind `panicast -d / --daemon`. Returns the process exit
 //   code. Refuses to start when another daemon instance — or a TUI session — is
 //   already alive (double-run would fight over :9090, the mpv instance and the
-//   SQLite writes).
+//   SQLite writes). A failed mini-LMS bind is fatal here (the daemon exits
+//   non-zero; systemd's restart policy self-heals) — no pre-flight port probing.
 int run_daemon();
 
 } // namespace panicast

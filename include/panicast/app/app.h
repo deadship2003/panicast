@@ -135,6 +135,13 @@ public:
 private:
     std::unique_ptr<IFrontend> frontend_ = std::make_unique<UI>();
     bool headless_ = false; // N09/S1: daemon mode — no draw/input, engine-only frame loop
+    // LIF-001 guard standardization: in the headless daemon, a failed bind of the
+    //   mini-LMS listener (the port the phone connects to) is FATAL instead of
+    //   "log and run degraded" — a zombie daemon was worse than a loud restart.
+    //   run() skips the frame loop and exits with exit_code_ (systemd restart
+    //   policy then self-heals once the port frees).
+    bool headless_fatal_ = false;
+    int exit_code_ = 0; // process exit code used by shutdown()'s _exit()
     std::function<void()>
         exit_hook_; // N09/S1: called just before _exit(0) in shutdown() // D12-3c: App owns the ncurses UI through the IFrontend contract (UI swappable — Qt could implement the same interface). Concrete UI is named only at this construction point + the static UI::is_input_cancelled input-marker check.
     MPVController player;

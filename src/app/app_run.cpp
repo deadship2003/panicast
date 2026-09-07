@@ -82,6 +82,15 @@ void App::set_headless() {
 void App::run() {
     startup();
 
+    // LIF-001 guard standardization: a fatal startup failure in the headless
+    //   daemon (e.g. the mini-LMS port is taken) skips the frame loop and exits
+    //   non-zero — systemd's Restart=on-failure then self-heals once the cause
+    //   clears, instead of leaving a "running" but unreachable daemon.
+    if (headless_fatal_) {
+        running = false;
+        exit_code_ = 1;
+    }
+
     while (running) {
         if (headless_) {
             // N09/S1 daemon frame: same per-frame crossings as the TUI loop (exit checks +
@@ -556,7 +565,11 @@ void App::startup() {
                                   IniConfig::instance().get_remote_lms_port(),
                                   IniConfig::instance().get_remote_lms_port()));
         } else {
+            // TUI keeps going without remote control; the headless daemon dies
+            //   instead (fatal-bind policy — see headless_fatal_ in app.h).
             EVENT_LOG("mini-LMS server failed to start (see log); continuing without it");
+            if (headless_)
+                headless_fatal_ = true;
         }
     }
 #else
@@ -646,7 +659,7 @@ void App::shutdown() {
     //   restored by frontend_->cleanup; the OS reclaims all resources (threads, mpv, DB handles).
     if (exit_hook_)
         exit_hook_(); // N09/S1: daemon cleanup (pid file) — _exit skips main's epilogue
-    _exit(0);
+    _exit(exit_code_);
 }
 
 } // namespace panicast

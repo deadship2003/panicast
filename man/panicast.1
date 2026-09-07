@@ -9,13 +9,33 @@ panicast is a powerful terminal-based podcast and radio player with an ncurses i
 It supports TuneIn radio streaming, RSS podcast subscriptions, YouTube playback, and local media files.
 .SH OPTIONS
 .TP
+.B service \fISUBCOMMAND\fR [\fIOPTIONS\fR]
+Manage the background service (a USER systemd unit; sudo-free). Subcommands:
+\fBinstall\fR (generate/refresh the unit; never starts it), \fBuninstall\fR (stop,
+disable and remove the unit), \fBstart\fR, \fBstop\fR, \fBrestart\fR,
+\fBenable\fR, \fBdisable\fR (autostart only — never starts/stops the instance),
+\fBstatus\fR (service + playback status; the init system is the truth source, a
+mismatching pid file is flagged as an anomaly).
+Options: \fB--json\fR (machine-readable output on every subcommand; status carries
+scope/unitPath/installed/enabled/running/pid/uptimeSeconds/lastExitCode/lastError/
+restartCount/platformInit), \fB--user\fR (the default) and \fB--system\fR (accepted
+for interface uniformity but refused with exit code 4 — panicast is user-scope by
+design).
+Bare aliases (\fBpanicast start\fR, \fBpanicast status\fR, ...) dispatch
+identically. Exit codes: 0 success / 1 invalid arguments / 2 insufficient
+privileges / 3 service operation failed / 4 unsupported scope.
+Logs are viewed with native tools (no built-in log command):
+\fBtail \-F ~/.local/share/panicast/panicast\-$(date +%Y%m%d).log\fR.
+.TP
 .B \-d, \-\-daemon
 Run the headless daemon: the same engine as the TUI with a NullFrontend \(em playback,
 queue, subscriptions, downloads and the remote-control servers run without a terminal
 (Squeezer / the web remote is the UI). Foreground process; SIGTERM (Ctrl+C) exits
 cleanly. Refuses to start when another daemon instance is already running. The systemd
-unit runs this mode: \fBpanicast.service\fR (manage via \fBpanicast start/stop/restart/status\fR;
-\fBstart\fR likewise refuses while the daemon is already running \(em use \fBrestart\fR to recycle).
+unit runs this mode: \fBpanicast.service\fR (manage via \fBpanicast service
+start/stop/restart/status\fR; \fBstart\fR while already running is an idempotent
+no-op — use \fBrestart\fR to recycle). A failed mini-LMS bind is fatal here (the
+daemon exits non-zero; systemd's restart policy self-heals).
 .TP
 .B \-h, \-\-help
 Display help message and exit.

@@ -1,4 +1,4 @@
-// panicast CLI service subcommands — implementation. See cli_commands.h for the contract.
+// panicast service lifecycle CLI — implementation. See cli_commands.h for the contract.
 #include "panicast/app/cli_commands.h"
 
 #include <cstdio>
@@ -20,6 +20,7 @@
 #include <unistd.h>
 
 #include <fmt/format.h>
+#include <nlohmann/json.hpp>
 
 #include "panicast/app/daemon_mode.h"
 #include "panicast/config/ini_config.h"
@@ -35,20 +36,148 @@ namespace
 //   through `systemctl --user`, so no sudo/polkit is involved anywhere.
 const char *UNIT = "panicast.service";
 
-int systemctl(const char *verb, bool) {
+// LIF-001 unified exit codes: 0 success / 1 invalid arguments / 2 insufficient
+//   privileges / 3 service operation failed / 4 unsupported scope.
+enum : int {
+    EXIT_OK = 0,
+    EXIT_ARGS = 1,
+    EXIT_PRIV = 2,
+    EXIT_SVC = 3,
+    EXIT_SCOPE = 4,
+};
+
+// ── systemctl plumbing — the init system is the truth source (LIF-001 red line) ──
+
+// Run one `systemctl --user <verb> panicast.service`; maps onto the unified codes.
+int systemctl_user(const char *verb) {
     std::string cmd = std::string("systemctl --user ") + verb + " " + UNIT;
-    // ::system() returns the RAW wait status (256 per exit-code unit) — the process
-    //   exit code would be truncated (& 0xFF); normalize to 0/1.
-    return ::system(cmd.c_str()) == 0 ? 0 : 1;
+    // ::system() returns the RAW wait status (256 per exit-code unit) — normalize.
+    return ::system(cmd.c_str()) == 0 ? EXIT_OK : EXIT_SVC;
 }
 
-std::string today_log_path() {
-    std::time_t now = std::time(nullptr);
-    std::tm tmv{};
-    localtime_r(&now, &tmv);
-    char buf[32];
-    std::strftime(buf, sizeof(buf), "%Y%m%d", &tmv);
-    return Paths::get_data_dir() + "/panicast-" + buf + ".log";
+// One `systemctl --user show` call returning the properties status needs
+//   (name=value lines; works for a not-installed unit too — empty/inactive values).
+std::string systemctl_show_props() {
+    std::string cmd = std::string("systemctl --user show ") + UNIT +
+                      " -p FragmentPath -p UnitFileState -p ActiveState -p MainPID"
+                      " -p ActiveEnterTimestamp -p ExecMainStatus -p Result -p NRestarts"
+                      " 2>/dev/null";
+    FILE *f = ::popen(cmd.c_str(), "r");
+    if (!f)
+        return "";
+    std::string out;
+    char buf[4096];
+    size_t n;
+    while ((n = ::fread(buf, 1, sizeof(buf), f)) > 0)
+        out.append(buf, n);
+    ::pclose(f);
+    return out;
+}
+
+std::string show_prop(const std::string &props, const char *key) {
+    std::string pat = std::string(key) + "=";
+    size_t p = props.find(pat);
+    if (p == std::string::npos)
+        return "";
+    p += pat.size();
+    size_t e = props.find('\n', p);
+    return props.substr(p, e == std::string::npos ? std::string::npos : e - p);
+}
+
+// ── Status model (LIF-001 #6: fixed fields; pidfile = bare-run clue only) ──────
+struct ServiceState {
+    std::string scope = "user";
+    std::string unitPath;      // FragmentPath ("" when not installed)
+    bool installed = false;
+    bool enabled = false;
+    std::string enabledState;  // raw UnitFileState (enabled/disabled/static/…)
+    bool running = false;      // ActiveState == active
+    int pid = 0;               // MainPID
+    long long uptimeSeconds = -1;
+    int lastExitCode = -1;     // ExecMainStatus
+    std::string lastError;     // Result ("" when success / unknown)
+    int restartCount = 0;      // NRestarts
+    std::string platformInit = "systemd --user";
+    // Cross-check clue (NOT truth): a live pidfile while the unit is inactive
+    //   (or naming a different pid) = bare-run instance / anomaly → status flags it.
+    bool pidfileAlive = false;
+    int pidfilePid = 0;
+    bool pidfileAnomaly = false;
+};
+
+ServiceState query_service_state() {
+    ServiceState s;
+    std::string props = systemctl_show_props();
+    s.unitPath = show_prop(props, "FragmentPath");
+    // systemctl reports a path even for the implicit unit; treat installed = the
+    //   file actually exists on disk.
+    s.installed = !s.unitPath.empty() && std::filesystem::exists(s.unitPath);
+    s.enabledState = show_prop(props, "UnitFileState");
+    s.enabled = s.enabledState == "enabled";
+    s.running = show_prop(props, "ActiveState") == "active";
+    s.pid = std::atoi(show_prop(props, "MainPID").c_str());
+    s.lastExitCode = std::atoi(show_prop(props, "ExecMainStatus").c_str());
+    std::string result = show_prop(props, "Result");
+    s.lastError = (result.empty() || result == "success") ? "" : result;
+    s.restartCount = std::atoi(show_prop(props, "NRestarts").c_str());
+    // ActiveEnterTimestamp: "Sun 2026-09-07 14:13:22 CST" → epoch (local time).
+    std::string ts = show_prop(props, "ActiveEnterTimestamp");
+    if (s.running && !ts.empty()) {
+        std::tm tmv{};
+        if (strptime(ts.c_str(), "%a %Y-%m-%d %H:%M:%S", &tmv)) {
+            time_t started = ::mktime(&tmv);
+            if (started > 0)
+                s.uptimeSeconds = (long long)::time(nullptr) - (long long)started;
+        }
+    }
+    // pidfile cross-check — clue only (LIF-001 red line: init is the truth source).
+    s.pidfileAlive = daemon_pid_alive(&s.pidfilePid);
+    s.pidfileAnomaly = s.pidfileAlive && (!s.running || s.pid != s.pidfilePid);
+    return s;
+}
+
+// ── Dual output (LIF-001 #6): --json everywhere ───────────────────────────────
+
+nlohmann::json verb_result_json(const char *cmd, bool ok, const std::string &message) {
+    return nlohmann::json{{"scope", "user"},
+                          {"cmd", cmd},
+                          {"ok", ok},
+                          {"message", message}};
+}
+
+void emit(const nlohmann::json &j, bool json, const std::string &human) {
+    if (json)
+        printf("%s\n", j.dump().c_str());
+    else if (!human.empty())
+        printf("%s\n", human.c_str());
+}
+
+// ── JSON status (fixed field set per LIF-001 #6) ──────────────────────────────
+nlohmann::json status_json(const ServiceState &s) {
+    return nlohmann::json{{"scope", s.scope},
+                          {"unitPath", s.installed ? s.unitPath : ""},
+                          {"installed", s.installed},
+                          {"enabled", s.enabled},
+                          {"running", s.running},
+                          {"pid", s.pid},
+                          {"uptimeSeconds", s.uptimeSeconds},
+                          {"lastExitCode", s.lastExitCode},
+                          {"lastError", s.lastError},
+                          {"restartCount", s.restartCount},
+                          {"platformInit", s.platformInit},
+                          {"pidfileAnomaly", s.pidfileAnomaly}};
+}
+
+// Human-readable uptime ("2h 13m" / "45s").
+std::string human_uptime(long long sec) {
+    if (sec < 0)
+        return "?";
+    long long h = sec / 3600, m = (sec % 3600) / 60, s2 = sec % 60;
+    if (h > 0)
+        return fmt::format("{}h {}m", h, m);
+    if (m > 0)
+        return fmt::format("{}m {}s", m, s2);
+    return fmt::format("{}s", s2);
 }
 
 // Minimal base64 encode for the Basic-auth header.
@@ -72,7 +201,8 @@ std::string b64encode(const std::string &in) {
 }
 
 // One-shot LMS status query over the cometd endpoint; returns the raw reply body ("" on
-//   any failure). Used by `panicast status` to report what the daemon is playing.
+//   any failure). Used by human-mode `panicast service status` to report what the
+//   daemon is playing.
 std::string lms_status_reply() {
     IniConfig::instance().load();
     int port = IniConfig::instance().get_remote_lms_port();
@@ -208,57 +338,132 @@ static bool takeover_via_fd_passing() {
     return true;
 }
 
-// N10.1: `panicast start` refuses when the daemon is already running (user-final
-//   semantics — starting twice would be a silent no-op via systemctl otherwise).
-int cmd_start() {
-    int pid = 0;
-    if (daemon_pid_alive(&pid)) {
-        printf("panicast daemon: already running (pid %d) — nothing to start.\n", pid);
-        printf("Use `panicast restart` to recycle it.\n");
-        return 1;
-    }
-    // N10.2: a TUI session owns the engine while it runs and restarts the service on
-    //   exit — starting the daemon beside it would race mpv and the DB.
-    if (tui_pid_alive(&pid)) {
-        printf("panicast daemon: a TUI session owns playback right now (pid %d).\n", pid);
-        printf("Exit the TUI first — it restarts the service automatically.\n");
-        return 1;
-    }
-    // N10.4: refuse to start into a port conflict — an orphan/older session holding
-    //   :9090 with no pidfile would otherwise yield a "running" but unreachable daemon.
-    if (lms_port_in_use()) {
-        printf("panicast daemon: the mini-LMS port is already in use by another "
-               "process —\nlikely an older panicast session without a pid file. Exit it "
-               "first (see `panicast status`).\n");
-        return 1;
-    }
-    return systemctl("start", false);
+// ── Subcommands ───────────────────────────────────────────────────────────────
+
+// LIF-001 #2: install is idempotent registration — regenerate/refresh the unit,
+//   never start/enable anything.
+int cmd_install(bool json) {
+    ensure_user_unit();
+    ServiceState s = query_service_state();
+    std::string msg = s.installed
+                          ? fmt::format("installed (unit: {})", s.unitPath)
+                          : "install failed (unit file not present after write)";
+    emit(verb_result_json("install", s.installed, msg), json, "panicast: " + msg);
+    return s.installed ? EXIT_OK : EXIT_SVC;
 }
 
-int cmd_status() {
-    IniConfig::instance().load();
+// LIF-001 #2: uninstall removes the registration — stop, disable, delete the unit,
+//   daemon-reload. Uninstall when not installed = success message, not an error.
+int cmd_uninstall(bool json) {
+    ServiceState s = query_service_state();
+    if (!s.installed) {
+        std::string msg = "not installed — nothing to do";
+        emit(verb_result_json("uninstall", true, msg), json, "panicast: " + msg);
+        return EXIT_OK;
+    }
+    if (s.running)
+        systemctl_user("stop");
+    if (s.enabled)
+        systemctl_user("disable");
+    std::error_code ec;
+    std::filesystem::remove(s.unitPath, ec);
+    ::system("systemctl --user daemon-reload 2>/dev/null");
+    std::string msg = ec ? fmt::format("failed to remove {}", s.unitPath)
+                         : fmt::format("uninstalled (unit removed: {})", s.unitPath);
+    emit(verb_result_json("uninstall", !ec, msg), json, "panicast: " + msg);
+    return ec ? EXIT_SVC : EXIT_OK;
+}
+
+// LIF-001 #2 + red line ①: start re-run while already running = idempotent success
+//   (the PROCESS-level single-instance guard lives in run_daemon; this is the verb
+//   layer). Refused (3) while a TUI session owns the engine — starting beside it
+//   would race mpv and the DB.
+int cmd_start(bool json) {
+    ServiceState s = query_service_state();
+    if (s.running) {
+        std::string msg = fmt::format("already running (pid {}, up {}) — nothing to start",
+                                      s.pid, human_uptime(s.uptimeSeconds));
+        emit(verb_result_json("start", true, msg), json, "panicast daemon: " + msg);
+        return EXIT_OK;
+    }
     int pid = 0;
-    bool alive = daemon_pid_alive(&pid);
-    printf("panicast daemon: %s", alive ? "running" : "stopped");
-    if (alive)
-        printf(" (pid %d)", pid);
-    else if (::system(("systemctl --user is-enabled " + std::string(UNIT) + " >/dev/null 2>&1")
-                          .c_str()) == 0)
-        printf(" [enabled]");
-    printf("\n");
     if (tui_pid_alive(&pid)) {
+        std::string msg = fmt::format(
+            "a TUI session owns playback right now (pid {}) — exit it first; it "
+            "restarts the service automatically on exit",
+            pid);
+        emit(verb_result_json("start", false, msg), json, "panicast daemon: " + msg);
+        return EXIT_SVC;
+    }
+    ensure_user_unit();
+    int rc = systemctl_user("start");
+    if (rc == EXIT_OK) {
+        emit(verb_result_json("start", true, "started"), json, "panicast daemon: started");
+    } else {
+        emit(verb_result_json("start", false, "systemctl start failed (see `journalctl --user -u panicast`)"),
+             json, "panicast daemon: start FAILED — `journalctl --user -u panicast` for details");
+    }
+    return rc;
+}
+
+// Generic passthrough verbs (stop / restart / enable / disable). enable refreshes
+//   the unit first (registration upkeep); none of them start/stop anything beyond
+//   their own verb (LIF-001 #3: transient control vs persistent auto-start split).
+int cmd_verb(const char *cmd, bool json, bool refresh_unit_first) {
+    if (refresh_unit_first)
+        ensure_user_unit();
+    int rc = systemctl_user(cmd);
+    emit(verb_result_json(cmd, rc == EXIT_OK, rc == EXIT_OK ? std::string(cmd) + " ok"
+                                                            : std::string(cmd) + " failed"),
+         json, std::string("panicast daemon: ") + cmd + (rc == EXIT_OK ? " OK" : " FAILED"));
+    return rc;
+}
+
+// LIF-001 #6 + red line ③: truth source = the init system; pidfile is a bare-run
+//   clue and a coexisting/mismatching one is flagged as an anomaly. Human mode
+//   additionally shows what the daemon is playing (mini-LMS query).
+int cmd_status(bool json) {
+    IniConfig::instance().load();
+    ServiceState s = query_service_state();
+
+    if (json) {
+        printf("%s\n", status_json(s).dump().c_str());
+        return EXIT_OK;
+    }
+
+    printf("panicast daemon: %s", s.running ? "running" : "stopped");
+    if (s.running)
+        printf(" (pid %d, up %s)", s.pid, human_uptime(s.uptimeSeconds).c_str());
+    printf(" [%s]\n", s.enabled ? "enabled" : s.enabledState.empty() ? "not-installed"
+                                                                     : s.enabledState.c_str());
+    if (s.installed)
+        printf("unit: %s (%s)\n", s.unitPath.c_str(), s.platformInit.c_str());
+    if (s.lastExitCode > 0 || !s.lastError.empty())
+        printf("last exit: code %d, result %s (restarts: %d)\n", s.lastExitCode,
+               (s.lastError.empty() ? "success" : s.lastError.c_str()), s.restartCount);
+    if (s.pidfileAnomaly) {
+        printf("ANOMALY: the pid file claims pid %d while the unit is %s — a bare-run "
+               "instance? Stop it (`kill %d` or exit that terminal) or `panicast "
+               "service restart`.\n",
+               s.pidfilePid, s.running ? "running a different pid" : "inactive",
+               s.pidfilePid);
+        return EXIT_OK;
+    }
+    int tui_pid = 0;
+    if (tui_pid_alive(&tui_pid)) {
         printf("panicast TUI:   running (pid %d) — owns playback; the service is handed "
                "back on its exit\n",
-               pid);
-        return 0;
+               tui_pid);
+        return EXIT_OK;
     }
-    if (!alive)
-        return 0;
-    // What is it playing? Ask the daemon's own LMS endpoint.
+    if (!s.running)
+        return EXIT_OK;
+
+    // What is it playing? Ask the daemon's own LMS endpoint (human mode only).
     std::string reply = lms_status_reply();
     if (reply.empty()) {
         printf("mini-LMS : no reply on :%d\n", IniConfig::instance().get_remote_lms_port());
-        return 0;
+        return EXIT_OK;
     }
     // Cheap field extraction — nlohmann is available but the shapes are tiny and flat.
     auto field = [&](const char *key) -> std::string {
@@ -274,9 +479,9 @@ int cmd_status() {
         size_t e = reply.find_first_of(",}", p);
         return reply.substr(p, e - p);
     };
-    std::string mode = field("mode");
     printf("mini-LMS : listening on :%d (%s)\n", IniConfig::instance().get_remote_lms_port(),
            field("player_name").c_str());
+    std::string mode = field("mode");
     printf("playback : %s", mode.empty() ? "unknown" : mode.c_str());
     std::string title = field("current_title");
     if (!title.empty())
@@ -288,76 +493,28 @@ int cmd_status() {
     if (!vol.empty())
         printf(" vol=%s%%", vol.c_str());
     printf("\n");
-    return 0;
-}
-
-int cmd_log(int argc, char **argv) {
-    // journalctl -fu behaviour BY DEFAULT: print the tail, then keep following —
-    //   interacting with the TUI/daemon keeps producing lines. History depth via -n N;
-    //   -f/--follow accepted as an explicit no-op. Ctrl+C exits.
-    int tail_n = 20;
-    for (int i = 2; i < argc; ++i) {
-        std::string a = argv[i];
-        if (a == "-f" || a == "--follow")
-            ; // already the default
-        else if (a == "-n" && i + 1 < argc)
-            tail_n = std::atoi(argv[++i]);
-    }
-    std::string path = today_log_path();
-    std::vector<std::string> lines;
-    std::ifstream f(path);
-    std::string l;
-    while (std::getline(f, l))
-        lines.push_back(l);
-    if (lines.size() > (size_t)tail_n)
-        lines.erase(lines.begin(), lines.end() - tail_n);
-    for (auto &s : lines)
-        printf("%s\n", s.c_str());
-    // journalctl -f equivalent: poll the file (handles the midnight rollover by
-    //   re-resolving the "today" name each second).
-    fflush(stdout);
-    size_t last_size = lines.size();
-    for (;;) {
-        sleep(1);
-        std::string now_path = today_log_path();
-        std::ifstream g(now_path);
-        std::vector<std::string> cur;
-        while (std::getline(g, l))
-            cur.push_back(l);
-        if (now_path != path) { // rolled over to a new day
-            path = now_path;
-            last_size = 0;
-        }
-        for (size_t i = last_size; i < cur.size(); ++i)
-            printf("%s\n", cur[i].c_str());
-        if (cur.size() >= last_size)
-            last_size = cur.size();
-        else
-            last_size = 0; // truncated/rotated file — replay from the top
-        fflush(stdout);
-    }
+    return EXIT_OK;
 }
 } // namespace
 
 bool service_handover_takeover() {
+    ServiceState s = query_service_state();
     int pid = 0;
-    if (!daemon_pid_alive(&pid))
-        return false;
+    if (!s.running) {
+        // Unit inactive — only a BARE-run daemon (pidfile clue) needs stopping.
+        if (!daemon_pid_alive(&pid))
+            return false;
+    }
     // N10.5: ZERO-DROP takeover — receive the daemon's listener + live phone
     //   connections (staged; LmsServer::start adopts them). Falls through to the
     //   plain stop on any failure, exactly the pre-N10.5 behaviour.
     takeover_via_fd_passing();
-    // N10.3: the service lives in the USER manager — no auth needed. A pre-N10.3
-    //   install may still run the SYSTEM unit (with its polkit rule); stop that too
-    //   before the pidfile fallback so a migration-era daemon can't survive beside
-    //   the TUI.
+    // Truth source = init: stop through the user manager (synchronous).
     ::system(("systemctl --user stop " + std::string(UNIT) + " 2>/dev/null").c_str());
-    if (daemon_pid_alive())
-        ::system(("systemctl stop " + std::string(UNIT) + " 2>/dev/null").c_str());
-    // N10.2: a MANUALLY started daemon (unit inactive, pidfile alive) survives both
-    //   attempts — stop it by pid so the same clean-exit flush runs (SIGTERM is
-    //   exactly what systemd sends).
-    if (daemon_pid_alive())
+    // N10.2: a BARE-run daemon (unit inactive, pidfile alive) survives the
+    //   systemctl stop — stop it by pid so the same clean-exit flush runs (SIGTERM
+    //   is exactly what systemd sends).
+    if (daemon_pid_alive(&pid))
         ::kill(pid, SIGTERM);
     // Wait for the daemon to finish its clean shutdown (bounded; it takes ~2-3s).
     for (int i = 0; i < 100; ++i) {
@@ -391,8 +548,8 @@ void service_handover_restore() {
         ::unlink(intent.c_str());
     } else {
         // N10.3: user unit — start needs no privileges. If the user manager isn't
-        //   available (no session), this fails silently; the next `panicast start` or
-        //   TUI session retries.
+        //   available (no session), this fails silently; the next `panicast service
+        //   start` or TUI session retries.
         ::system(("systemctl --user start " + std::string(UNIT) + " 2>/dev/null").c_str());
     }
 }
@@ -401,7 +558,10 @@ void service_handover_restore() {
 //   NO sudo is ever needed: the unit lives under $XDG_CONFIG_HOME (~/.config), and
 //   start/stop/enable go through `systemctl --user`. ExecStart points at the RUNNING
 //   binary (via /proc/self/exe) so the service always runs the installed build.
-//   Called on the first TUI run (auto-setup) and by `panicast start`.
+//   LIF-001 #7/#8: the crash-restart policy lives HERE (generated at install time,
+//   never hand-edited); re-running install refreshes it.
+//   Called by `panicast service install` / `start` / `restart` / `enable` and on the
+//   first TUI run (auto-setup).
 void ensure_user_unit() {
     const char *home = std::getenv("HOME");
     const char *xdg = std::getenv("XDG_CONFIG_HOME");
@@ -424,11 +584,16 @@ void ensure_user_unit() {
     // The unit body as a raw string — reads exactly like the file on disk, and the
     //   {} slots make it a single literal token that cannot be orphaned by an edit.
     std::string unit = fmt::format(
-        R"(# panicast user-space service (installed automatically by the first run — N10.3).
-#   Manage with: panicast start|stop|restart|enable|disable (all sudo-free, systemctl --user).
+        R"(# panicast user-space service (installed by `panicast service install` — N10.3).
+#   Manage with: panicast service start|stop|restart|enable|disable|status
+#   (all sudo-free, systemctl --user).
 [Unit]
 Description=panicast headless media daemon (Squeeze Client remote)
 After=network.target
+# LIF-001 #7: crash-restart policy with a retry cap — a permanently occupied port
+#   (fatal bind) must back off to 'failed', not crash-loop every RestartSec forever.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -465,26 +630,71 @@ WantedBy=default.target
 int run_cli_command(int argc, char *argv[]) {
     if (argc < 2)
         return -1;
+
+    // `panicast service <subcmd> [flags]` (LIF-001 unified entry) or the bare
+    //   alias `panicast <subcmd> [flags]` — identical dispatch.
     std::string cmd = argv[1];
+    int argi = 1;
+    if (cmd == "service") {
+        if (argc < 3) {
+            std::fprintf(stderr,
+                         "usage: panicast service <install|uninstall|start|stop|restart|"
+                         "enable|disable|status> [--json] [--user]\n");
+            return EXIT_ARGS;
+        }
+        cmd = argv[2];
+        argi = 2;
+    }
+
+    bool json = false;
+    bool have_user = false, have_system = false;
+    for (int i = argi + 1; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--json")
+            json = true;
+        else if (a == "--user")
+            have_user = true;
+        else if (a == "--system")
+            have_system = true;
+        else {
+            std::fprintf(stderr, "panicast: unknown service option '%s'\n", a.c_str());
+            return EXIT_ARGS;
+        }
+    }
+    // LIF-001 #4: the scope flag exists for interface uniformity; the system scope
+    //   is refused BY DESIGN (N10.3: user-space unit, sudo-free) with exit code 4.
+    if (have_system) {
+        std::string msg =
+            "--system is not supported: panicast runs as a USER systemd unit by "
+            "design (N10.3 — sudo-free). Omit the flag or pass --user.";
+        emit(verb_result_json(cmd.c_str(), false, msg), json, "panicast: " + msg);
+        return EXIT_SCOPE;
+    }
+    (void)have_user; // --user is the default; accepted as an explicit no-op
+
+    if (cmd == "install")
+        return cmd_install(json);
+    if (cmd == "uninstall")
+        return cmd_uninstall(json);
+    if (cmd == "start")
+        return cmd_start(json);
     if (cmd == "status")
-        return cmd_status();
-    if (cmd == "start") {
-        ensure_user_unit();
-        return cmd_start();
-    }
+        return cmd_status(json);
     if (cmd == "stop")
-        return systemctl("stop", false);
-    if (cmd == "restart") {
-        ensure_user_unit();
-        return systemctl("restart", false);
+        return cmd_verb("stop", json, false);
+    if (cmd == "restart")
+        return cmd_verb("restart", json, true);
+    if (cmd == "enable")
+        return cmd_verb("enable", json, true);
+    if (cmd == "disable")
+        return cmd_verb("disable", json, false);
+
+    // Unknown subcommand: inside the explicit `service` namespace it is a typo
+    //   (invalid args); as a bare word it may be a normal CLI path (e.g. "-a url").
+    if (argi == 2) {
+        std::fprintf(stderr, "panicast: unknown service subcommand '%s'\n", cmd.c_str());
+        return EXIT_ARGS;
     }
-    // N10.3: enable/disable of a USER unit needs no sudo — it's a file in $XDG_CONFIG_HOME.
-    if (cmd == "enable" || cmd == "disable") {
-        ensure_user_unit();
-        return systemctl(cmd.c_str(), false);
-    }
-    if (cmd == "log")
-        return cmd_log(argc, argv);
     return -1;
 }
 

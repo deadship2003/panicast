@@ -34,10 +34,15 @@ static void print_usage() {
     std::cout << "  panicast                  Full engine TUI (takes over the engine\n";
     std::cout << "                            from the service with zero-drop handover;\n";
     std::cout << "                            hands it back on exit)\n";
-    std::cout << "  panicast start|stop|restart|enable|disable   Manage the background\n";
-    std::cout << "                            service (user systemd unit; no sudo needed)\n";
-    std::cout << "  panicast status           Service + playback status\n";
-    std::cout << "  panicast log [-n N]       Tail today's log and FOLLOW it (Ctrl+C exits)\n";
+    std::cout << "  panicast service <cmd>    Manage the background service (user systemd\n";
+    std::cout << "                            unit; sudo-free). Bare `panicast <cmd>` works\n";
+    std::cout << "                            as an alias. Commands:\n";
+    std::cout << "                              install uninstall start stop restart\n";
+    std::cout << "                              enable disable status\n";
+    std::cout << "                            Options: --json, --user (default),\n";
+    std::cout << "                            --system (refused: user-scope by design)\n";
+    std::cout << "                            Exit codes: 0 ok / 1 bad args / 2 privileges /\n";
+    std::cout << "                            3 operation failed / 4 unsupported scope\n";
     std::cout << "  panicast -a <url>         Add feed from URL\n";
     std::cout << "  panicast -i <file>        Import OPML subscriptions\n";
     std::cout << "  panicast -e <file>        Export to OPML file\n";
@@ -98,8 +103,9 @@ int main(int argc, char *argv[]) {
     //   so IniConfig / DatabaseManager see the new (~/.local/share/panicast) location. Idempotent.
     Paths::migrate_legacy();
 
-    // N09/S1→N10: service subcommands (status/start/stop/restart/enable/disable/log) are
-    //   handled and exited here, before any TUI/daemon machinery starts.
+    // N09/S1→N10: service subcommands (install/uninstall/start/stop/restart/enable/
+    //   disable/status; LIF-001 surface with bare aliases) are handled and exited
+    //   here, before any TUI/daemon machinery starts.
     if (int rc = run_cli_command(argc, argv); rc >= 0)
         return rc;
 

@@ -115,27 +115,10 @@ void remove_tui_pidfile() {
 // Probe-bind with the SAME semantics LmsServer's listener uses (dual-stack any +
 //   SO_REUSEADDR): fails exactly when an ACTIVE listener holds the port — TIME_WAIT
 //   leftovers of a just-exited daemon do NOT trip it (important for systemd restart).
-bool lms_port_in_use() {
-    IniConfig::instance().load();
-    if (!IniConfig::instance().get_remote_lms_enabled())
-        return false; // no LMS → nothing to guard
-    int port = IniConfig::instance().get_remote_lms_port();
-    int fd = ::socket(AF_INET6, SOCK_STREAM, 0);
-    if (fd < 0)
-        return false;
-    int v6only = 0, yes = 1;
-    ::setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &v6only, sizeof(v6only));
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in6 a6{};
-    a6.sin6_family = AF_INET6;
-    a6.sin6_port = htons((uint16_t)port);
-    a6.sin6_addr = in6addr_any;
-    bool busy = ::bind(fd, reinterpret_cast<struct sockaddr *>(&a6), sizeof(a6)) != 0;
-    ::close(fd);
-    if (busy)
-        LOG(fmt::format("[DAEMON] pre-flight: mini-LMS port {} is already in use", port));
-    return busy;
-}
+//   ── RETIRED (LIF-001 guard standardization): the pre-flight port probe was an
+//   iteration-era compensation for orphan sessions without pidfiles. The standard
+//   design is a FATAL bind failure in the headless daemon (headless_fatal_) +
+//   systemd restart; no probing before the fact.
 
 namespace
 {
@@ -231,19 +214,13 @@ int run_daemon() {
         ::unlink(intent.c_str());
     }
 
-    // N10.4: an orphan/older-binary session can hold the mini-LMS port with NO pidfile
-    //   (e.g. a TUI from before the pidfile existed). Starting beside it produced a
-    //   ZOMBIE daemon — everything up except the very thing the phone connects to.
-    //   Fail loudly instead; systemd's restart then self-heals once the port frees.
-    //   N10.5: SKIPPED when a handover was adopted — the exiting owner legitimately
-    //   still holds a dup of the listener while we take it over.
-    if (!LmsServer::handover_staged() && lms_port_in_use()) {
-        std::fprintf(stderr,
-                     "panicast --daemon: the mini-LMS port is already in use by "
-                     "another process — likely an older panicast session without a pid file.\n"
-                     "Exit it (check `panicast status` / running terminals) and try again.\n");
-        return 1;
-    }
+    // LIF-001 guard standardization: no pre-flight port probe. A busy mini-LMS
+    //   port surfaces as a FATAL bind failure inside App::run() (headless_fatal_ →
+    //   exit 1) — systemd's Restart=on-failure self-heals once the port frees,
+    //   instead of the old probe's guesswork or a "running" but unreachable daemon.
+    //   (N10.5 caveat covered: when a handover was adopted above, the exiting owner
+    //   legitimately still holds a dup of the listener while we take it over.)
+
     // Same boot sequence as the TUI main (minus the terminal save — no terminal here).
     Paths::migrate_legacy();
     curl_global_init(CURL_GLOBAL_ALL);
