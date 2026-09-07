@@ -25,6 +25,10 @@ project(panicast
 set(PANICAST_FIX_SUFFIX "")
 set(PANICAST_FULL_VERSION "panicast-V0.0.1")
 
+# LIF-006: all build artifacts land in <repo>/bin — one output location for
+#   every entry (make / build.sh / CI). The build/ dir holds only CMake cache.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+
 # ── N08: mini-LMS module (Squeezer remote control — LMS JSON-RPC/Bayeux control plane) ──
 #   Default ON (builtin). Disable to trim the binary:
 #     cmake -DPANICAST_REMOTE_LMS=OFF ..
@@ -528,9 +532,11 @@ endif()
 # =============================================================================
 endforeach()
 
-# =============================================================================
-# Install
-# =============================================================================
+# META-8: JS runtime (quickjs from vendor/) — installed if present.
+#   The binary is fetched manually into vendor/quickjs/qjs (see
+#   vendor/quickjs/README.md); ./setup.sh deploys it for local dev, and this
+#   rule ships it in `make install` / the release tarball. Without quickjs,
+#   yt-dlp nsig solving fails.
 # META-8: JS runtime (quickjs from vendor/) — installed if present.
 #   Download once with: ./build.sh  (bootstrap step), then cmake --install
 #   deploys everything. Without quickjs, yt-dlp nsig solving fails.

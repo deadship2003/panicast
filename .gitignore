@@ -5,6 +5,7 @@ secrets/client_secret.json
 include/podradio/net/client_secret_builtin.h
 build*/
 build-*/
+bin/
 compile_commands.json
 *.o
 include/panicast/net/client_secret_builtin.h

@@ -34,7 +34,7 @@ chmod +x vendor/quickjs/qjs
 ./vendor/quickjs/qjs --version   # (or: qjs -e 'console.log(std.getenv?)'  — version printed on -h)
 ```
 
-`../build.sh install` installs it into `/usr/local/bin/qjs` (system-wide, needs sudo).
+`../setup.sh` installs it into `/usr/local/bin/qjs` (system-wide, needs sudo).
 
 ## ⚠ EJS solver dependency (the one catch)
 

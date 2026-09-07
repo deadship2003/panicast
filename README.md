@@ -52,18 +52,17 @@
 
 ### 🚀 一键部署
 
-发布包自带 **quickjs-ng** JS 运行时（`vendor/quickjs/`，~2MB）与部署脚本，解压后一条命令搞定依赖+运行时+编译+安装：
+发布包自带 **quickjs-ng** JS 运行时（`vendor/quickjs/`，~2MB）与部署脚本，解压后三条命令搞定依赖+运行时+编译+安装（LIF-006 三件套：setup 管环境 / build 管编译 / install 管部署）：
 
 ```bash
 tar xzf panicast-V0.0.1.tar.gz
 cd panicast-V0.0.1
-./setup.sh install      # JS 运行时 + 构建依赖 + 编译 + 安装 panicast（全部装到 /usr/local/bin，需 sudo）
-# 可选参数:
-#   install --no-deps   跳过系统构建依赖安装（已装好时）
-#   clean               清理 build/
+./setup.sh             # 构建依赖 + JS 运行时（绝不编译；--check 仅预检）
+./build.sh             # 编译 → bin/panicast（等价 make build；--debug 调试版）
+sudo make install      # 部署 panicast + man/文档 → /usr/local/bin
 ```
 
-`setup.sh` 把 `qjs`/`deno`/`panicast` 都装到 `/usr/local/bin`（系统 PATH 内，**无需改 PATH**）。`./setup.sh` 按当前机器 CPU 自动检测并原生编译（无交叉编译，各平台在本机各自编译）。详见 [`vendor/quickjs/README.md`](vendor/quickjs/README.md)。
+`setup.sh` 把 `qjs`/`deno` 装到 `/usr/local/bin`，`make install` 装 `panicast`（全在系统 PATH 内，**无需改 PATH**）。各平台在本机原生编译（无交叉编译）。详见 [`vendor/quickjs/README.md`](vendor/quickjs/README.md)。
 
 > **为什么需要 JS 运行时**：yt-dlp 2026.07+ 求解 YouTube nsig「n 挑战」必须有 JS 运行时。**推荐 quickjs-ng**（~2MB，冷启动比 deno 快约 10×，可消除首次播放 YouTube 的初始卡顿）；deno（~106MB）为回退方案。apt 的 nodejs(20) 被 yt-dlp 标记 unsupported 不生效。详见下文「运行时依赖（JS 运行时）」。
 >
@@ -91,7 +90,7 @@ panicast
 ```bash
 # 安装依赖
 sudo apt-get update
-sudo apt-get install -y mpv libmpv-dev libncurses5-dev libncursesw5-dev \
+sudo apt-get install -y mpv libmpv-dev libncurses-dev \
     libcurl4-openssl-dev libsqlite3-dev libxml2-dev libfmt-dev \
     nlohmann-json3-dev libqrencode-dev cmake ninja-build g++
 
