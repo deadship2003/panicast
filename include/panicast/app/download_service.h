@@ -1,4 +1,4 @@
-// DownloadService — Application Service (功能抽象层) for media downloads.
+// DownloadService — Application Service (functional abstraction layer) for media downloads.
 //   Owns the download EXECUTION ENGINE (D43 — App god-object service extraction, #73): the pending
 //   queue (pending_downloads_), slot throttling (pump/start_one_download), the shared yt-dlp core
 //   (ytdlp_download, Y24.49), and the curl path with retry/resume. App keeps download_node — the
@@ -14,7 +14,7 @@
 //   member names: library_/pool_/subtitle_/pending_downloads_ — behaviour-equivalent).
 //
 //   Behaviour is UNCHANGED. The download path is not covered by the pty smoke test (no network);
-//   it is verified by the user's end-to-end batch test ("用户末尾统一测").
+//   it is verified by the user's end-to-end batch test ("user tests at the end in one pass").
 #pragma once
 
 #include <cstddef>

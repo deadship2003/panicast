@@ -1,10 +1,10 @@
-// SearchService — the Application Service (功能抽象层) for the in-tree search.
+// SearchService — the Application Service (functional abstraction layer) for the in-tree search.
 //   Owns the search STATE (query, match list, match cursor) AND the search ALGORITHM — both are
 //   display-decoupled (operate on tree nodes + a cursor passed in, never touch display_list /
 //   selected_idx / view_start / LINES). D10-2 moved the state out of App; D11-3b moves the
 //   algorithm: search_recursive (subtree title-match), collect_context_matches (the F20
 //   context-aware collection: peers-same-type → peers-diff-type → cursor subtree → global, +
-//   dedup), and cycle_match (the jump_search cursor math). Principle ("搜索只负责搜索的事"):
+//   dedup), and cycle_match (the jump_search cursor math). Principle ("search does only search's job"):
 //   search produces a match list + cursor (model); flatten/scroll/select is the VIEW's job —
 //   jump_to_match now only expands ancestors (SearchService::reveal_node) + hands the node to
 //   pending_select (the deferred cursor the run loop resolves); App no longer touches display.

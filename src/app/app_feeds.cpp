@@ -15,7 +15,7 @@
 namespace panicast
 {
 
-// Y24.xx: native Douyin creator listing via DouyinApi (X-Bogus direct API, 接口C aweme/post).
+// Y24.xx: native Douyin creator listing via DouyinApi (X-Bogus direct API, Endpoint C aweme/post).
 //   Returns a PODCAST_FEED tree with PODCAST_EPISODE children (title=desc, url=CDN play_addr).
 //   yt-dlp has no DouyinUserIE, so douyin.com/user/<sec_uid> must go through this path instead
 //   of parse_tiktok_user_videos. Cookies are optional (douyin_cookie.txt); empty → anonymous
@@ -57,7 +57,7 @@ static TreeNodePtr parse_douyin_user_videos(const std::string &url, const std::s
     api.setSession(cookie_header); // fixed Chrome UA (matches browser_* params)
 
     constexpr int PER_PAGE = 20;
-    constexpr int MAX_PAGES = 5; // cap at ~100 videos to avoid 风控
+    constexpr int MAX_PAGES = 5; // cap at ~100 videos to avoid risk-control blocks
     long long cursor = 0;
     std::string last_err;
 
@@ -93,7 +93,7 @@ static TreeNodePtr parse_douyin_user_videos(const std::string &url, const std::s
         if (!page_res.hasMore)
             break;
         cursor = page_res.nextCursor;
-        std::this_thread::sleep_for(std::chrono::milliseconds(800)); // 防风控
+        std::this_thread::sleep_for(std::chrono::milliseconds(800)); // risk-control pacing
     }
 
     result->children_loaded = true;
@@ -308,7 +308,7 @@ TreeNodePtr App::parse_feed_by_type(TreeNodePtr node, const std::string &url, UR
         break;
     }
     case URLType::DOUYIN_USER:
-        // Y24.xx: native Douyin creator listing via DouyinApi (X-Bogus direct API 接口C).
+        // Y24.xx: native Douyin creator listing via DouyinApi (X-Bogus direct API, Endpoint C).
         //   yt-dlp has no DouyinUserIE, so douyin.com/user/<sec_uid> is handled here instead.
         result = parse_douyin_user_videos(cur_url, node->title);
         break;

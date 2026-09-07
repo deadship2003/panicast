@@ -1,6 +1,6 @@
 // DouyinApi — direct Douyin web API client with X-Bogus signature.
 //
-// Ported from PodRadio-Win_Qt `src/net/douyin_api.cpp` (方案B 步骤4, verified 2026-08-01).
+// Ported from PodRadio-Win_Qt `src/net/douyin_api.cpp` (Plan B step 4, verified 2026-08-01).
 //   X-Bogus is a pure static algorithm (MD5 + RC4 + fixed magic constants) — no JS engine.
 //   Reference algorithm: f2/utils/xbogus.py (Apache-2.0, Johnserf-Seed/f2).
 //
@@ -394,7 +394,7 @@ std::string DouyinApi::build_cookie_header_from_txt(const std::string &cookies_t
 
 // ── API methods ───────────────────────────────────────────────────────────────────
 
-// 接口A: query/user — logged-in user's numeric uid
+// Endpoint A: query/user — logged-in user's numeric uid
 void DouyinApi::fetchMyUserId(std::function<void(const std::string &, const std::string &)> cb) {
     std::string err;
     std::string params =
@@ -421,7 +421,7 @@ void DouyinApi::fetchMyUserId(std::function<void(const std::string &, const std:
     }
 }
 
-// 接口A2: profile/other — logged-in user's nickname + sec_uid
+// Endpoint A2: profile/other — logged-in user's nickname + sec_uid
 void DouyinApi::fetchMyProfile(const std::string &userId,
                                std::function<void(const MyProfile &)> cb) {
     MyProfile out;
@@ -458,7 +458,7 @@ void DouyinApi::fetchMyProfile(const std::string &userId,
     cb(out);
 }
 
-// 接口B: following/list — one page of followed UP masters (requires login cookie)
+// Endpoint B: following/list — one page of followed UP masters (requires login cookie)
 void DouyinApi::fetchFollowing(const std::string &userId, int offset, int count,
                                std::function<void(const FollowingResult &)> cb) {
     FollowingResult out;
@@ -510,7 +510,7 @@ void DouyinApi::fetchFollowing(const std::string &userId, int offset, int count,
     cb(out);
 }
 
-// 接口C: aweme/post — one page of a UP's posted videos
+// Endpoint C: aweme/post — one page of a UP's posted videos
 void DouyinApi::fetchUserVideos(const std::string &secUserId, long long maxCursor, int count,
                                 std::function<void(const UserVideoResult &)> cb) {
     UserVideoResult out;
@@ -608,7 +608,7 @@ void DouyinApi::searchKeyword(const std::string &keyword, int offset, int count,
     cb(out);
 }
 
-// 接口D: aweme/favorite — a UP's liked videos
+// Endpoint D: aweme/favorite — a UP's liked videos
 void DouyinApi::fetchUserLikes(const std::string &secUserId, long long maxCursor, int count,
                                std::function<void(const UserVideoResult &)> cb) {
     UserVideoResult out;
@@ -657,7 +657,7 @@ void DouyinApi::fetchUserLikes(const std::string &secUserId, long long maxCursor
     cb(out);
 }
 
-// 接口F: mix/aweme — a UP's collection/合集 videos (paginated by `cursor`)
+// Endpoint F: mix/aweme — a UP's collection videos (paginated by `cursor`)
 void DouyinApi::fetchUserMix(const std::string &mixId, long long cursor, int count,
                              std::function<void(const UserVideoResult &)> cb) {
     UserVideoResult out;
@@ -704,10 +704,10 @@ void DouyinApi::fetchUserMix(const std::string &mixId, long long cursor, int cou
     cb(out);
 }
 
-// 合集辅助: 取某 UP 首个含 mix_info 的视频的 mix_id
+// Collection helper: get the mix_id of a UP's first video carrying mix_info
 void DouyinApi::fetchFirstMixId(const std::string &secUserId,
                                 std::function<void(const std::string &, const std::string &)> cb) {
-    // Reuse 接口C with a single item and inspect its mix_info.
+    // Reuse Endpoint C with a single item and inspect its mix_info.
     UserVideoResult res;
     fetchUserVideos(secUserId, 0, 1, [&](const UserVideoResult &r) { res = r; });
     if (!res.ok) {
@@ -749,24 +749,29 @@ void DouyinApi::fetchFirstMixId(const std::string &secUserId,
     }
 }
 
-// ── 扫码登录（终端二维码，纯 API）───────────────────────────────────────────────
-// Douyin 登录端点不签名（X-Bogus 只用于业务接口）。整体用 curl cookie jar 贯通：
-//   引导 → 取码 → 轮询，登录成功后 sessionid/sessionid_ss 自动落 douyin_cookie.txt。
+// ── QR login (terminal QR code, pure API) ─────────────────────────────────────
+// Douyin login endpoints are unsigned (X-Bogus only guards the business endpoints).
+//   The whole flow rides one curl cookie jar: bootstrap → fetch code → poll; on
+//   success sessionid/sessionid_ss land in douyin_cookie.txt automatically.
 //
-// ⚠️ 端点/参数为公开资料拼的猜测，需连真机 F12 校正：
-//   - get_qrcode 返回的 data.qrcode 可能是「可扫 URL 字符串」，也可能是「base64 图片」。
-//     若为 base64 图片，终端二维码无法直接渲染（需换成返回 URL 的字段/端点）。
-//   - check_qrconnect 的状态字段名（status / error_code）也需按实际响应确认。
+// ⚠️ Endpoints/params are guesses assembled from public material — verify against
+//   a real browser's F12 capture:
+//   - get_qrcode's data.qrcode may be a scannable URL string OR a base64 image.
+//     A base64 image cannot be rendered as a terminal QR code (a field/endpoint
+//     returning a URL would be needed instead).
+//   - check_qrconnect's status field name (status / error_code) also needs
+//     confirming against real responses.
 DouyinApi::LoginQR DouyinApi::request_qrcode() {
     LoginQR qr;
     std::string jar = IniConfig::instance().get_tiktok_douyin_cookies_file();
     std::string err;
 
-    // 1. Bootstrap：匿名访问 douyin.com 首页，让 curl 写入 ttwid + passport_csrf_token。
-    //    （不判登录态——passport_csrf_token 首访就有；登录态只看 sessionid。）
+    // 1. Bootstrap: visit the douyin.com homepage anonymously so curl's jar picks
+    //    up ttwid + passport_csrf_token. (No login-state check — the csrf token is
+    //    set on first visit anyway; login state is judged by sessionid alone.)
     douyin_login_get("https://www.douyin.com/", jar, kDouyinUA, err);
 
-    // 2. 取二维码 + token。字段名/参数待 F12 确认。
+    // 2. Fetch the QR code + token. Field names/params pending F12 verification.
     std::string qr_url =
         "https://sso.douyin.com/get_qrcode/?aid=6383"
         "&service=https%3A%2F%2Fwww.douyin.com"
@@ -818,13 +823,14 @@ DouyinApi::LoginResult DouyinApi::poll_qrcode(const std::string &token) {
     try {
         auto j = json::parse(body);
         auto d = j.value("data", json::object());
-        // 状态：1=未扫 2=已扫待确认 3=成功。字段名（status/error_code）待 F12 确认。
+        // Status: 1=not scanned 2=scanned, awaiting confirmation 3=success. Field
+        //   names (status/error_code) pending F12 verification.
         if (d.contains("status"))
             r.code = d.value("status", 0);
         else if (d.contains("error_code"))
             r.code = d.value("error_code", 0);
         if (r.code == 3) {
-            // 登录成功：sessionid 已由 cookie jar 写入 douyin_cookie.txt。
+            // Login succeeded: sessionid was written to douyin_cookie.txt by the cookie jar.
             r.sessionid = jar_cookie(jar, "sessionid");
             r.ok = !r.sessionid.empty();
             if (!r.ok)

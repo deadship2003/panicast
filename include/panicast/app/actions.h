@@ -1,7 +1,7 @@
 // Actions — UI → Core commands (the INPUT direction of the message bus). UI emits via
 // publish_action (usually through the Keymap: key → Action → publish). App / Services subscribe
 // to each action type + handle. This is the seam that lets the UI be a pure interaction layer
-// (no direct Core calls) — see docs/DESIGN.md "目标架构".
+// (no direct Core calls) — see docs/DESIGN.md "target architecture".
 // (D6 seed: PlayPause. D7: + Volume/Nav, + Keymap.)
 #pragma once
 

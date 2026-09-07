@@ -252,7 +252,7 @@ void App::open_command_window() {
     // Y24.25: ":asr" = force ASR. D11-3a: this is the ONE entry point that intentionally does NOT
     //   call resolve_subtitle_source — it bypasses ALL local/online sources (embedded / local ASR
     //   SRT / online 📜) and goes straight to real-time transcription. L-key / remote asr_start do
-    //   respect "本地字幕文件优先"; :asr is the manual override when you want ASR regardless.
+    //   respect "local subtitle first"; :asr is the manual override when you want ASR regardless.
     if (s == "asr") {
         auto pst = player.get_state();
         if (pst.has_media && !subtitle_.transcription_engine().realtime_running()) {

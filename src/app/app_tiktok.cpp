@@ -218,7 +218,7 @@ void App::tiktok_subscribe(const std::string &input) {
             });
         } else {
             // Douyin creator — subscribed as platform "douyin" (sec_uid = handle). Expansion goes
-            //   through DouyinApi::fetchUserVideos (接口C), not yt-dlp (which has no DouyinUserIE).
+            //   through DouyinApi::fetchUserVideos (Endpoint C), not yt-dlp (which has no DouyinUserIE).
             EVENT_LOG(fmt::format("T: adding Douyin creator {}", handle));
             pool_.submit([this, handle, url]() {
                 TiktokAccount a{0, "douyin", handle, url, ""};
@@ -246,7 +246,7 @@ void App::tiktok_subscribe(const std::string &input) {
 
 // 'a' in T mode: Douyin QR scan login (terminal QR, pure API — mirrors B-mode start_bilibili_login).
 //   Douyin login is cookie-only (sessionid): the curl cookie jar writes it to douyin_cookie.txt,
-//   so there's no account DB row. After login, 接口C (creator listing) carries sessionid.
+//   so there's no account DB row. After login, Endpoint C (creator listing) carries sessionid.
 void App::start_douyin_login() {
     EVENT_LOG("T: requesting Douyin QR code...");
     DouyinApi api;

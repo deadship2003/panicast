@@ -201,7 +201,7 @@ static std::string build_bilibili_cookie(const std::string &sessdata);
 BilibiliAPI::NavInfo BilibiliAPI::fetch_nav(const std::string &sessdata) {
     NavInfo info;
     // Y24.49: use the full bilibili cookie (SESSDATA + buvid3 + b_nut) — raw SESSDATA alone is
-    //   rejected by Bilibili risk control (nav returns -101 "账号未登录"), which made the QR-login
+    //   rejected by Bilibili risk control (nav returns -101 "not logged in"), which made the QR-login
     //   flow fall back to "Bili #<uid>" (UID instead of username). buvid3 comes from the spi endpoint.
     std::string cookie = build_bilibili_cookie(sessdata); // defined below (forward-declared)
     std::string resp = Network::fetch_cookie("https://api.bilibili.com/x/web-interface/nav", cookie,

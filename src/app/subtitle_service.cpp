@@ -171,7 +171,7 @@ void SubtitleService::begin_track(TreeNodePtr node, bool has_video) {
 }
 
 // D49: decide + start the play-path auto-ASR. MUST run in a pool task (find_local_subtitle stats
-//   the WSL2 /mnt/e mount). Order mirrors resolve_subtitle_source's "本地字幕文件优先": any cheaper
+//   the WSL2 /mnt/e mount). Order mirrors resolve_subtitle_source's "local subtitle first": any cheaper
 //   source (embedded track / local sidecar / online 📜) suppresses ASR. Local-file-only — the
 //   realtime path fetches remote media whole before transcribing, which is a deliberate user
 //   action (L), not something play should trigger implicitly.
@@ -223,7 +223,7 @@ void SubtitleService::maybe_auto_asr_(TreeNodePtr node, bool has_video) {
                     node->title));
 }
 
-// D11-3a: central "本地字幕文件优先" resolver. Returns the first available non-ASR source so ASR is
+// D11-3a: central "local subtitle first" resolver. Returns the first available non-ASR source so ASR is
 //   only started when nothing cheaper exists. Embedded (mpv active sub) implies video; LocalSrt uses
 //   the unified find_local_subtitle (download-dir + adjacent); Online is the RSS 📜 transcript.
 ResolvedSubtitle SubtitleService::resolve_subtitle_source(TreeNodePtr node) {

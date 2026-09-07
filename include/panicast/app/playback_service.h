@@ -1,4 +1,4 @@
-// PlaybackService — the Application Service (功能抽象层) for playback. Owns:
+// PlaybackService — the Application Service (functional abstraction layer) for playback. Owns:
 //   • playback ACTION handling (UI→Core via the message bus): play/pause, volume (D8a).
 //   • the implicit "playlist" QUEUE STATE + pure queue logic (D8b-1): current_playlist,
 //     current_index, shuffle_queue_ and the playlist_mutex_ that guards them, plus

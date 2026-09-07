@@ -33,7 +33,7 @@ public:
     //   (app-data dir, not ~/Downloads), so the ASR SRT is checked FIRST, then a same-name sidecar
     //   next to local_file (any subtitle ext — for online 📜 sidecars). Supersedes the adjacent-only
     //   find_sidecar for all callers (probe_sidecar, load_async, SubtitleService::resolve_subtitle_source)
-    //   so the "本地字幕文件优先" policy has a single source of truth. Returns the path or "".
+    //   so the "local subtitle first" policy has a single source of truth. Returns the path or "".
     static std::string find_local_subtitle(TreeNodePtr node);
 
     // Async load: probe sidecar → fetch+parse node->subtitle_url → set status + pending segments.

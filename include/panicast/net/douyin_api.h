@@ -1,6 +1,6 @@
 // DouyinApi — direct Douyin web API client with X-Bogus signature.
 //
-// Ported from PodRadio-Win_Qt `src/net/douyin_api.{h,cpp}` (方案B 步骤4, verified 2026-08-01).
+// Ported from PodRadio-Win_Qt `src/net/douyin_api.{h,cpp}` (Plan B step 4, verified 2026-08-01).
 //   X-Bogus is a pure static algorithm (MD5 + RC4 + fixed magic constants) — no JS engine.
 //   Reference algorithm: f2/utils/xbogus.py (Apache-2.0, Johnserf-Seed/f2).
 //
@@ -31,10 +31,10 @@ public:
     // Set session credentials. userAgent empty → a fixed Chrome UA (matches the browser_* params).
     void setSession(const std::string &cookieHeader, const std::string &userAgent = "");
 
-    // ── 接口A: query/user — get the logged-in user's own numeric uid ───────
+    // ── Endpoint A: query/user — get the logged-in user's own numeric uid ──
     void fetchMyUserId(std::function<void(const std::string &userId, const std::string &err)> cb);
 
-    // ── 接口A2: profile/other — get the logged-in user's nickname + sec_uid ─
+    // ── Endpoint A2: profile/other — the user's nickname + sec_uid ─────────
     struct MyProfile {
         bool ok = false;
         std::string nickname;
@@ -44,12 +44,12 @@ public:
     };
     void fetchMyProfile(const std::string &userId, std::function<void(const MyProfile &)> cb);
 
-    // ── 接口B: following/list — one page of followed UP masters ────────────
+    // ── Endpoint B: following/list — one page of followed UP masters ────────
     struct FollowingUser {
         std::string uid;       // numeric uid
         std::string secUid;    // MS4w... stable id (for fetchUserVideos later)
-        std::string nickname;  // display name (昵称)
-        std::string signature; // bio (简介)
+        std::string nickname;  // display name
+        std::string signature; // bio
         int followerCount = 0;
         std::string avatarUrl;
     };
@@ -64,7 +64,7 @@ public:
     void fetchFollowing(const std::string &userId, int offset, int count,
                         std::function<void(const FollowingResult &)> cb);
 
-    // ── 接口C: aweme/post — one page of a UP's posted videos ────────────────
+    // ── Endpoint C: aweme/post — one page of a UP's posted videos ──────────
     // Expanding a subscribed-UP node calls this with the UP's sec_uid. Returns video entries
     // with play_addr CDN direct links (mpv can play directly).
     struct UserVideo {
@@ -89,33 +89,33 @@ public:
     void fetchUserVideos(const std::string &secUserId, long long maxCursor, int count,
                          std::function<void(const UserVideoResult &)> cb);
 
-    // ── 接口D: aweme/favorite — a UP's liked videos (❤️ 喜欢 TAB) ──────────
+    // ── Endpoint D: aweme/favorite — a UP's liked videos (❤️ likes tab) ────
     void fetchUserLikes(const std::string &secUserId, long long maxCursor, int count,
                         std::function<void(const UserVideoResult &)> cb);
 
-    // ── 接口F: mix/aweme — videos of a UP's collection/合集 (📚 合集 TAB) ────
+    // ── Endpoint F: mix/aweme — a UP's collection videos (📚 collections tab) ─
     // Paginated by `cursor` (NOT max_cursor). Requires a mix_id (see fetchFirstMixId).
     void fetchUserMix(const std::string &mixId, long long cursor, int count,
                       std::function<void(const UserVideoResult &)> cb);
 
-    // ── 合集辅助: 取某 UP 首个含 mix_info 的视频的 mix_id ─────────────────────
+    // ── Collection helper: first mix_id among a UP's videos w/ mix_info ────
     void fetchFirstMixId(const std::string &secUserId,
                          std::function<void(const std::string &mixId, const std::string &err)> cb);
 
-    // ── 扫码登录（终端二维码，纯 API）───────────────────────────────────────────
-    // Douyin 登录端点（sso.douyin.com）不走 X-Bogus 签名；用 curl 的 cookie jar 直连，
-    //   登录态唯一判据是 `sessionid`（非空）。cookie 由 jar 写入 douyin_cookie.txt。
-    // ⚠️ 端点/字段为公开资料拼的猜测，需连真机 F12 校正（见 douyin_api.cpp 内注释）。
+    // ── QR login (terminal QR code, pure API) ────────────────────────────────
+    // Douyin login endpoints (sso.douyin.com) skip the X-Bogus signature; they are
+    //   hit directly via curl's cookie jar; login state is judged solely by a
+    //   non-empty `sessionid`. The jar persists cookies to douyin_cookie.txt.
     struct LoginQR {
         bool ok = false;
-        std::string qr_content; // 二维码要编码的内容（可扫 URL）；可能是 base64 图片（不可渲染）
-        std::string token;      // 轮询 check_qrconnect 的 token
+        std::string qr_content; // QR payload (scannable URL); may be a base64 image (unrenderable)
+        std::string token;      // token for polling check_qrconnect
         std::string err;
     };
     struct LoginResult {
-        bool ok = false;       // 登录成功（sessionid 已写入 cookie jar）
-        std::string sessionid; // 登录态凭据（非空 = 已登录）
-        int code = 0;          // 轮询状态：1=未扫 2=已扫待确认 3=成功
+        bool ok = false;       // login succeeded (sessionid in the cookie jar)
+        std::string sessionid; // login credential (non-empty = logged in)
+        int code = 0;          // poll status: 1=pending 2=scanned 3=success
         std::string err;
     };
     LoginQR request_qrcode();

@@ -1,4 +1,4 @@
-// SubtitleService — the Application Service (功能抽象层) for subtitles / transcription (ASR).
+// SubtitleService — the Application Service (functional abstraction layer) for subtitles / transcription (ASR).
 //   Owns the SubtitleManager (detect/probe/load/offset/status) and TranscriptionEngine
 //   (whisper.cpp offline + real-time speech-to-text) that previously lived as bare App members.
 //   Centralizes their LIFECYCLE wiring: init() wires the engine to its own SubtitleManager + the
@@ -29,7 +29,7 @@ class IFrontend;
 
 // D11-3a: the result of resolving the best AVAILABLE (non-ASR) subtitle source for a track.
 //   resolve_subtitle_source returns the first that applies, in priority order, so every ASR entry
-//   point (L-key / :asr / remote asr_start) applies the SAME "本地字幕文件优先" chain instead of
+//   point (L-key / :asr / remote asr_start) applies the SAME "local subtitle first" chain instead of
 //   each re-implementing it. ASR is the fallback the CALLER starts when kind == None.
 struct ResolvedSubtitle {
     enum Kind { None, Embedded, LocalSrt, Online };
@@ -70,7 +70,7 @@ public:
     //   (Embedded [mpv has an active sub track] > LocalSrt [unified find_local_subtitle: download-dir
     //   + adjacent] > Online [node->has_subtitle + subtitle_url]). Returns {None} when nothing local/
     //   online exists → caller falls back to ASR. `:asr` intentionally does NOT call this (it forces
-    //   ASR past all local sources). Centralizes "本地字幕文件优先": remote asr_start + L-key both go
+    //   ASR past all local sources). Centralizes "local subtitle first": remote asr_start + L-key both go
     //   through here, so ASR only runs when no cheaper source exists.
     ResolvedSubtitle resolve_subtitle_source(TreeNodePtr node);
 

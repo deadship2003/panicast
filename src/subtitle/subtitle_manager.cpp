@@ -94,7 +94,7 @@ static std::string find_sidecar(const std::string &local_file) {
 //   <data_dir>/transcripts/<djb2-hex(url)>.srt (the XDG app-data dir — no longer next to the media
 //   in ~/Downloads), so the ASR SRT is checked there FIRST, then a same-name sidecar next to
 //   local_file (any ext, via find_sidecar — for online 📜 sidecars). Single source of truth for
-//   probe_sidecar/load_async/resolve_subtitle_source, so "本地字幕文件优先" has one lookup.
+//   probe_sidecar/load_async/resolve_subtitle_source, so the "local subtitle first" policy has one lookup.
 std::string SubtitleManager::find_local_subtitle(TreeNodePtr node) {
     if (!node)
         return "";

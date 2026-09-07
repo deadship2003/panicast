@@ -690,7 +690,7 @@ void App::dispatch_remote(const RemoteCommand &cmd) {
         auto pst = player.get_state();
         auto pn = playback_.playback_node();
         if (pst.has_media && pn && !subtitle_.transcription_engine().realtime_running()) {
-            // D11-3a: respect "本地字幕文件优先". If a cheaper source exists, load it instead of
+            // D11-3a: respect "local subtitle first". If a cheaper source exists, load it instead of
             //   burning ASR — this was the missing-local-check gap (remote always force-ASR'd).
             //   :asr remains the only force-bypass path.
             auto src = subtitle_.resolve_subtitle_source(pn);
