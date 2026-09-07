@@ -205,7 +205,13 @@ void MPVController::stop() {
 
     // D51: stop the jam watchdog FIRST so it cannot fire a recovery mid-shutdown. Bounded join
     //   (the loop wakes at least every ~2s; a recovery in flight adds its own bounded steps).
+    //   Latency fix: the cv notification makes the loop observe the flag immediately instead
+    //   of finishing its interval snooze first.
     jam_running_.store(false);
+    {
+        std::lock_guard<std::mutex> lk(jam_wake_mtx_);
+        jam_cv_.notify_all();
+    }
     if (jam_thread_.joinable()) {
         for (int i = 0; i < 300 && jam_recovering_.load(); ++i) // let an in-flight recovery finish
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -375,7 +381,13 @@ int MPVController::jam_threshold_ms_() {
 void MPVController::jam_loop_() {
     const int threshold = jam_threshold_ms_();
     while (jam_running_.load()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(std::max(500, threshold / 10)));
+        // Interval sleep on a cv: stop() notifies, so shutdown doesn't wait out the
+        //   remainder of a 5s snooze (the daemon-stop latency fix).
+        {
+            std::unique_lock<std::mutex> lk(jam_wake_mtx_);
+            jam_cv_.wait_for(lk, std::chrono::milliseconds(std::max(500, threshold / 10)),
+                             [this] { return !jam_running_.load(); });
+        }
         if (!jam_running_.load() || jam_recovering_.load())
             continue;
         const auto now = std::chrono::steady_clock::now();

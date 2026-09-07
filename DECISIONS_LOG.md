@@ -1,4 +1,21 @@
 
+## S01 — TUI 启动时延：接管请求体畸形 JSON 修复 + 握手/停止时延收敛（2026-09-07）
+
+**Context:** 用户报告 `panicast` 启动 5s 以上。日志实测分解（守护在跑场景，总计 ~10s）：LMS POST 后 drain 烧满 3s SO_RCVTIMEO（cometd 连接 keep-alive 永不关闭）；`poll(3000)` 又超时 3s；同步 `systemctl --user stop` 阻塞 3.7s。深挖发现 poll 超时的根因是**零掉线接管自始未生效**：`post_lms_handover` 拼的请求体第二个数组元素缺开括号（`}},"id":"999"}]`），守护端 nlohmann parse 静默丢弃（错误不记日志）→ handover 派发从未执行。停止 3.7s 的根因是 `jam_loop_` 每轮 `sleep_for(5s)`（threshold/10），`stop()` 的 join 只能等它睡醒。
+
+**Decision:** 三处修复而非重构：① 请求体补全为合法 JSON（保持字段形状不变，只补 `{`）；② drain 改为按 `Content-Length` 读完整响应即关闭（250ms 兜底），poll 上限 3000→1000ms；③ jam 看门狗睡眠改条件变量定时等待、`stop()` notify 立即唤醒。**取舍：保留同步 `systemctl stop`**（曾评估 `--no-block` + 短等待以进一步压时延，拒绝——TUI 在旧守护进程未死时启动引擎违反 LIF-001 单实例所有权红线；jam cv 修复后同步停止仅 ~44ms，无需放松语义）。
+
+**关键点:**
+- 守护端可诊断性补齐：cometd 请求体 parse 失败记日志（此前静默 `[]`，正是畸形体隐藏一整个 N10.5 时代的原因）；`send_handover_fds` 的 `listen_fd_<0` 静默早退补日志。
+- drain 的存在理由（"给传输线程一拍"）由 poll 承担，读响应只为不 RST；Content-Length 语义与守护响应实测一致（416 字节单包）。
+
+**Verification:** ctest 50/50 绿；畸形体负测（守护回 `[]` + parse FAILED 日志 + 无传输）与修复体正测（POST→SCM_RIGHTS 2ms）双证；`systemctl --user stop` 0.044s/0.037s 且 "Player state saved" 落盘；启动估算 ~2.1s（原 ~10s）。
+
+**Followups:** 本会话经 `./bin/panicast service install` 将 unit ExecStart 指向 `bin/panicast`（N10.3 设计：ExecStart=运行中二进制）——用户 `sudo make install` 后需从安装路径再跑一次 `service install` 以指回 `/usr/local/bin`；mpv AO=null 出现在用户真实终端日志（16:39/17:44/17:46 三轮），疑 WSLg pulse 链路问题，与本时延修复独立，待查。
+
+---
+
+
 ## L01 — LIF 准则库合规精化：构建三件套 + 服务 CLI 标准化 + 守护探测收敛（2026-09-07）
 
 **Context:** 用户引入全局 LIF 准则库（LIF-001 服务生命周期 CLI / LIF-002 --debug / LIF-006 构建三件套 / LIF-007 英文注释），要求 panicast 对齐。审计现状：裸动词服务 CLI 缺 install/uninstall/--json/scope/统一退出码；status 以 pidfile 为真相源（红线要求 init 为真相源）；`panicast log` 为内置聚合（rev3 已移出标准集）；build.sh 已被改名掉且无 Makefile；setup.sh 越权编译+安装；17 文件 64 行中文注释存量。

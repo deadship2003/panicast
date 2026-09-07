@@ -269,8 +269,11 @@ void LmsServer::send_handover_fds(const std::string &unix_path) {
     {
         std::lock_guard<std::mutex> lk(conns_mtx_);
         reap_done();
-        if (listen_fd_ < 0)
+        if (listen_fd_ < 0) {
+            LOG("[LMS-HANDOVER] no listener to transfer (server not running) — takeover falls "
+                "back to plain stop");
             return;
+        }
         fds.push_back(listen_fd_);
         meta["listen"] = 0;
         for (auto &c : conns_) {
@@ -691,6 +694,11 @@ std::string LmsServer::handle_http(Conn &c, const std::string &method, const std
     nlohmann::json out = nlohmann::json::array();
     try {
         nlohmann::json msgs = nlohmann::json::parse(body, nullptr, false);
+        if (msgs.is_discarded()) // errors were silently dropped here for the whole N10.5
+            //   era: a malformed TUI handover body produced an empty `[]` reply and no
+            //   dispatch, with nothing in the log to point at it. Say it now.
+            LOG(fmt::format("[LMS-HTTP] body parse FAILED ({} bytes) — request dropped: {}...",
+                            body.size(), body.substr(0, 120)));
         if (msgs.is_object()) // /jsonrpc.js style: single object in, single object out
             msgs = nlohmann::json::array({msgs});
         else if (!msgs.is_array())

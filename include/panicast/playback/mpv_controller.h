@@ -188,6 +188,12 @@ private:
     std::thread jam_thread_;
     std::atomic<bool> jam_running_{false};
     std::atomic<bool> jam_recovering_{false};
+    // Wake channel for the watchdog's interval sleep: without it jam_loop_ snoozes a
+    //   full threshold/10 (5s at the default) between checks, and stop()'s join sits
+    //   out the remainder — that alone stretched every daemon stop to ~4s. The cv
+    //   makes stop() observable within microseconds while keeping the poll cadence.
+    std::mutex jam_wake_mtx_;
+    std::condition_variable jam_cv_;
     std::mutex ctx_swap_mtx_; // serializes ctx_ reads (event/cmd loops) vs the recovery swap
     std::atomic<int64_t> evt_hb_ms_{0}; // event-loop heartbeat (steady-clock ms)
     uint32_t evt_generation_ = 0;       // event_loop's own generation guard (see cmd_generation_)

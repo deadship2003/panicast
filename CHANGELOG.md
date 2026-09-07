@@ -10,6 +10,25 @@
 
 ---
 
+## 性能修复 S01 — 2026-09-07 — TUI 启动时延 ~10s → ~2s（N10.5 零掉线接管自始未生效之修复）
+
+> 根因链：`post_lms_handover` 的请求体是畸形 JSON（第二个数组元素缺 `{`）→ 守护端 nlohmann 静默丢弃（parse 错误不记日志）→ fd 接管从未派发 → TUI 每次启动吃满 poll 超时 + 无 keep-alive 感知的 drain 超时 + 同步 systemctl stop 等待 jam 看门狗 5s 睡眠醒来。实测分解（daemon 在跑场景）：drain 3.0s + poll 3.0s + stop 3.7s + TUI 引擎自启 ~1.5s。
+
+### 实现
+- **接管请求体修复**：补上缺失的 `{`（`}},"id":"999"}]` → `]}},{"id":"999"}]`）——零掉线 fd 接管（N10.5）首次真正生效；实测 POST→SCM_RIGHTS 送达 2ms。
+- **drain 有界化**：POST 后按 `Content-Length` 读完整响应即关闭（~1ms），不再烧满 3s SO_RCVTIMEO（cometd 连接是 keep-alive，旧 drain 每次必超时）；整体 250ms 兜底。
+- **poll 上限 3000→1000ms**：健康守护 ~1ms 内回连，1s 只约束失败回退路径。
+- **jam 看门狗 cv 化**：`jam_loop_` 的 `sleep_for(5s)` 改为条件变量定时等待，`stop()` 立即唤醒——守护停止 3.86s → 0.04s（含状态落盘）。同步 systemctl stop 保留（LIF-001 单实例所有权语义不放松）。
+- **可诊断性**：cometd 请求体 parse 失败现在记日志（此前静默 `[]`）；`send_handover_fds` 的 `listen_fd_<0` 静默早退补日志。
+
+### 验收
+- ctest 50/50 绿、0-warning 构建；
+- 畸形体负测：守护回 `[]` 且日志出现 parse FAILED，无 fd 传输；修复体正测：2ms 完成传输；
+- `systemctl --user stop` 两轮实测 0.044s / 0.037s，"Player state saved" 干净落盘；
+- 守护在跑场景 TUI 启动估算 ~2.1s（原 ~10–12s）。
+
+---
+
 ## 工程合规 L01 — 2026-09-07 — LIF 准则库合规精化（构建三件套 / 服务 CLI / --debug / 注释）
 
 > 全局 LIF 准则库（LIF-001/002/006/007）对齐，五阶段独立 commit。决策记录见 `DECISIONS_LOG.md` L01。

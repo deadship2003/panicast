@@ -264,7 +264,7 @@ static bool post_lms_handover(const std::string &sock_path) {
     int fd = ::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
         return false;
-    timeval tv{3, 0};
+    timeval tv{0, 250 * 1000}; // 250ms — response arrives in ~1ms; this only bounds pathology
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
     sockaddr_in a{};
@@ -277,17 +277,43 @@ static bool post_lms_handover(const std::string &sock_path) {
     }
     std::string auth = b64encode(IniConfig::instance().get_remote_lms_user() + ":" +
                                  IniConfig::instance().get_remote_lms_pass());
+    // Startup-latency fix: this body was MALFORMED JSON for the whole N10.5 era — the
+    //   second array element lacked its opening brace (`}},"id":"999"}]` instead of
+    //   `]}},{"id":"999"}]`), so the daemon's errors-discarded nlohmann parse silently
+    //   dropped every takeover request: the fd transfer NEVER ran, the TUI ate the full
+    //   poll() bound every launch, and the phone's live connections tore down with the
+    //   daemon (zero-drop was entirely broken).
     std::string body = "[{\"channel\":\"/slim/request\",\"data\":{\"response\":\"/handover\","
                        "\"request\":[\"00:00:00:00:84:21\",[\"panicast\",\"handover\",\"" +
-                       sock_path + "\"]]}},\"id\":\"999\"}]";
+                       sock_path + "\"]]}},{\"id\":\"999\"}]";
     std::string req =
         "POST /cometd HTTP/1.1\r\nHost: localhost\r\nAuthorization: Basic " + auth +
         "\r\nContent-Type: text/json\r\nContent-Length: " + std::to_string(body.size()) +
         "\r\nConnection: close\r\n\r\n" + body;
     bool ok = ::send(fd, req.data(), req.size(), MSG_NOSIGNAL) == (ssize_t)req.size();
+    // Startup-latency fix: the daemon keeps cometd connections ALIVE, so the old
+    //   "drain until timeout" burned the full SO_RCVTIMEO (3s) on EVERY TUI launch
+    //   for nothing. Read the response properly instead: headers → Content-Length →
+    //   exactly that many body bytes → close. (The transfer thread connects to our
+    //   unix socket within ~1ms of the POST — poll() below covers the wait, not this.)
+    std::string resp;
     char sink[512];
-    while (::recv(fd, sink, sizeof(sink), 0) > 0)
-        ; // drain (the daemon's detached transfer thread needs a beat to connect)
+    while (resp.size() < 64 * 1024) {
+        ssize_t n = ::recv(fd, sink, sizeof(sink), 0);
+        if (n <= 0)
+            break; // timeout or EOF — either way we have all we're getting
+        resp.append(sink, (size_t)n);
+        size_t hdr_end = resp.find("\r\n\r\n");
+        if (hdr_end == std::string::npos)
+            continue;
+        size_t cl_pos = resp.find("Content-Length:");
+        if (cl_pos == std::string::npos || cl_pos > hdr_end)
+            break; // no length to wait for (shouldn't happen — daemon always sends it)
+        size_t v = cl_pos + strlen("Content-Length:");
+        long want = strtol(resp.c_str() + v, nullptr, 10);
+        if ((long)(resp.size() - hdr_end - 4) >= want)
+            break; // full body received — done, close now
+    }
     ::close(fd);
     return ok;
 }
@@ -313,9 +339,11 @@ static bool takeover_via_fd_passing() {
         ::unlink(path.c_str());
         return false;
     }
-    // Bounded wait for the daemon's detached transfer thread to connect.
+    // Bounded wait for the daemon's detached transfer thread to connect. It connects
+    //   within ~1ms of the POST when healthy (measured); 1s only bounds the failure
+    //   path (old daemon / not running) before falling back to the plain stop.
     pollfd p{ls, POLLIN, 0};
-    if (::poll(&p, 1, 3000) <= 0) {
+    if (::poll(&p, 1, 1000) <= 0) {
         ::close(ls);
         ::unlink(path.c_str());
         return false;
