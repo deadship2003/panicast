@@ -45,6 +45,12 @@ void remove_tui_pidfile();
 //   already alive (double-run would fight over :9090, the mpv instance and the
 //   SQLite writes). A failed mini-LMS bind is fatal here (the daemon exits
 //   non-zero; systemd's restart policy self-heals) — no pre-flight port probing.
-int run_daemon();
+//
+// LIF-002 (--debug): debug=true runs the SAME engine in the blocking foreground
+//   as a debug channel — refuses beside the systemd-managed instance, aligns the
+//   runtime context (WorkingDirectory + Environment=) from the user unit, and
+//   mirrors the log stream to the console. Not combinable with the service
+//   subcommands (they exit in main() before flag parsing).
+int run_daemon(bool debug = false);
 
 } // namespace panicast

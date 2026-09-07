@@ -97,8 +97,11 @@ void Logger::log(const std::string &msg) {
             std::strftime(buf, sizeof(buf), "%H:%M:%S", tmp);
         else
             buf[0] = '\0';
-        file_ << fmt::format("[{}.{:03d}] {}", buf, ms.count(), msg) << std::endl;
+        std::string line = fmt::format("[{}.{:03d}] {}", buf, ms.count(), msg);
+        file_ << line << std::endl;
         file_.flush();
+        if (echo_stderr_) // LIF-002 --debug: console mirror of the log stream
+            fmt::print(stderr, "{}\n", line);
     }
 }
 

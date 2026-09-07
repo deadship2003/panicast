@@ -27,6 +27,14 @@ privileges / 3 service operation failed / 4 unsupported scope.
 Logs are viewed with native tools (no built-in log command):
 \fBtail \-F ~/.local/share/panicast/panicast\-$(date +%Y%m%d).log\fR.
 .TP
+.B \-\-debug
+LIF-002 debug channel: run the headless engine in the blocking foreground with the
+unit's runtime context aligned (WorkingDirectory + Environment from the user unit)
+and every log line mirrored to the console. Refuses to start while the
+systemd-managed daemon is running (stop it with \fBpanicast service stop\fR first).
+SIGINT (Ctrl+C) exits through the same clean shutdown path as the service. Cannot
+be combined with the service subcommands.
+.TP
 .B \-d, \-\-daemon
 Run the headless daemon: the same engine as the TUI with a NullFrontend \(em playback,
 queue, subscriptions, downloads and the remote-control servers run without a terminal

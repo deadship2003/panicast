@@ -6,6 +6,7 @@
 #include "panicast/app/daemon_mode.h"
 
 #include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -134,9 +135,69 @@ void write_pidfile() {
 void remove_pidfile() {
     std::remove(daemon_pidfile_path().c_str());
 }
+
+// LIF-002 (--debug): true when the user unit is active per the init system.
+bool unit_active_via_systemd() {
+    FILE *f =
+        ::popen("systemctl --user is-active panicast.service 2>/dev/null", "r");
+    if (!f)
+        return false;
+    char buf[64] = {0};
+    size_t n = ::fread(buf, 1, sizeof(buf) - 1, f);
+    ::pclose(f);
+    return n > 0 && strncmp(buf, "active", 6) == 0;
+}
+
+// LIF-002 (--debug): restore the unit's runtime context — WorkingDirectory and
+//   every Environment= line — for a foreground debug run. The current unit
+//   carries no Environment= entries (deliberately; see ensure_user_unit), but
+//   the parser is general so future unit edits stay aligned automatically.
+void align_unit_environment() {
+    const char *home = std::getenv("HOME");
+    const char *xdg = std::getenv("XDG_CONFIG_HOME");
+    std::string base =
+        xdg && *xdg ? std::string(xdg) : std::string(home ? home : "") + "/.config";
+    std::ifstream f(base + "/systemd/user/panicast.service");
+    if (!f.is_open())
+        return; // no unit yet — run with the current environment
+    std::string line;
+    while (std::getline(f, line)) {
+        if (line.rfind("WorkingDirectory=", 0) == 0) {
+            std::string wd = line.substr(strlen("WorkingDirectory="));
+            if (!wd.empty())
+                ::chdir(wd.c_str());
+        } else if (line.rfind("Environment=", 0) == 0) {
+            std::string kv = line.substr(strlen("Environment="));
+            size_t eq = kv.find('=');
+            if (eq == std::string::npos)
+                continue;
+            std::string key = kv.substr(0, eq);
+            std::string val = kv.substr(eq + 1);
+            if (val.size() >= 2 && val.front() == '"' && val.back() == '"')
+                val = val.substr(1, val.size() - 2); // systemd quoted value
+            if (!key.empty())
+                ::setenv(key.c_str(), val.c_str(), 1);
+        }
+    }
+}
 } // namespace
 
-int run_daemon() {
+int run_daemon(bool debug) {
+    if (debug) {
+        // LIF-002: instance mutual exclusion — never race the managed instance.
+        if (unit_active_via_systemd()) {
+            std::fprintf(stderr,
+                         "panicast --debug: the systemd-managed daemon is running — stop it "
+                         "first (`panicast service stop`), then debug.\n");
+            return 1;
+        }
+        // LIF-002: restore the production runtime context, then mirror the log
+        //   stream to the console for the foreground session.
+        align_unit_environment();
+        Logger::instance().set_console_echo(true);
+        std::fprintf(stderr, "panicast --debug: foreground engine (unit env aligned; "
+                             "Ctrl+C exits cleanly)\n");
+    }
     // Double-instance guard: a manual `panicast -d` while the systemd service (or
     //   another manual run) is already alive would fight over :9090, the mpv instance
     //   and the SQLite writes. Refuse instead of racing.

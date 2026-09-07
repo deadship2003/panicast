@@ -43,6 +43,8 @@ static void print_usage() {
     std::cout << "                            --system (refused: user-scope by design)\n";
     std::cout << "                            Exit codes: 0 ok / 1 bad args / 2 privileges /\n";
     std::cout << "                            3 operation failed / 4 unsupported scope\n";
+    std::cout << "  panicast --debug          LIF-002 debug: foreground engine run with\n";
+    std::cout << "                            the unit's env aligned + console log echo\n";
     std::cout << "  panicast -a <url>         Add feed from URL\n";
     std::cout << "  panicast -i <file>        Import OPML subscriptions\n";
     std::cout << "  panicast -e <file>        Export to OPML file\n";
@@ -114,12 +116,14 @@ int main(int argc, char *argv[]) {
     bool purge = false;
     bool quiet_mode = false; /* --quiet = pure audio (vid=no, vo=null) */
 
-    /* CLI long options: --purge, --quiet, --vid, --vo, --ao, --help, --version.
-       (--daemon stays as an INTERNAL long option: the user service unit's ExecStart
-       uses it — nobody types it. The -d short form is gone per N10.3.) */
+    /* CLI long options: --purge, --quiet, --vid, --vo, --ao, --help, --version,
+       --debug (LIF-002 foreground engine debug). (--daemon stays as an INTERNAL
+       long option: the user service unit's ExecStart uses it — nobody types it.
+       The -d short form is gone per N10.3.) */
     static struct option long_options[] = {
         {"daemon", no_argument, 0, 'd'},
 
+        {"debug", no_argument, 0, 'D'},   /* LIF-002: foreground engine + console log echo */
         {"purge", no_argument, 0, 'P'},     {"quiet", no_argument, 0, 'q'},
         {"vid", required_argument, 0, 'V'}, {"vo", required_argument, 0, 'O'},
         {"ao", required_argument, 0, 'A'},  {"help", no_argument, 0, 'h'},
@@ -127,12 +131,16 @@ int main(int argc, char *argv[]) {
 
     std::string cli_vo, cli_vid, cli_ao; /* CLI overrides (empty = use defaults) */
     bool daemon_mode = false; /* --daemon (internal): headless daemon for the service unit */
+    bool debug_mode = false;  /* --debug (LIF-002): foreground engine debug run */
 
     int option_index = 0;
     while ((opt = getopt_long(argc, argv, "a:i:e:t:h?v", long_options, &option_index)) != -1) {
         switch (opt) {
         case 'd': // internal (--daemon only; reached from the systemd unit's ExecStart)
             daemon_mode = true;
+            break;
+        case 'D': /* --debug: LIF-002 foreground engine debug (long-only) */
+            debug_mode = true;
             break;
         case 'a':
             import_url = optarg;
@@ -176,9 +184,10 @@ int main(int argc, char *argv[]) {
 
     /* N10: -d / --daemon → headless foreground daemon (same engine, NullFrontend).
        Takes precedence over the TUI-only options; the double-instance guard lives in
-       run_daemon(). */
-    if (daemon_mode)
-        return run_daemon();
+       run_daemon(). LIF-002: --debug is the debug channel over the same engine —
+       refuses beside the managed instance, aligns the unit env, echoes logs. */
+    if (daemon_mode || debug_mode)
+        return run_daemon(debug_mode);
 
     /* --quiet = --vid=no --vo=null */
     if (quiet_mode) {
