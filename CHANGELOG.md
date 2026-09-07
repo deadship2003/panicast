@@ -10,6 +10,26 @@
 
 ---
 
+## 工程合规 L01 — 2026-09-07 — LIF 准则库合规精化（构建三件套 / 服务 CLI / --debug / 注释）
+
+> 全局 LIF 准则库（LIF-001/002/006/007）对齐，五阶段独立 commit。决策记录见 `DECISIONS_LOG.md` L01。
+
+### 实现
+- **构建三件套（LIF-006）**：`Makefile`（9 标准 target：all/build/clean/distclean/fmt/lint/test/install/uninstall，封装 CMake/Ninja）+ `build.sh`（薄编排 --debug/--clean，保留内存感知并行度与 git 新鲜度防护）+ `setup.sh` 瘦身为纯环境准备（`--check` 预检、JS 运行时部署、遗留产物清理，绝不编译）。产物统一输出 `./bin/`。apt 包名统一 `libncurses-dev`（Debian 13 合名兼容）。
+- **服务 CLI（LIF-001）**：规范入口 `panicast service <install|uninstall|start|stop|restart|enable|disable|status> [--json] [--user|--system]`，裸动词保留为别名；status 固定字段（scope/unitPath/installed/enabled/running/pid/uptimeSeconds/lastExitCode/lastError/restartCount/platformInit）改自 `systemctl --user show` 取数（init = 真相源，pidfile = 裸跑线索，冲突显式标注）；退出码统一 0/1/2/3/4；`--system` 显式拒绝（退出码 4，用户域单一设计）；`panicast log` 移除（`tail -F` 原生命令替代）；start 幂等。
+- **守护标准化**：`lms_port_in_use()` 预探测删除——无头守护 LMS bind 失败即致命退出（`headless_fatal_`），unit 注入 StartLimitIntervalSec/Burst，systemd 自愈；TUI 接管走 systemctl + 裸跑 pidfile SIGTERM 兜底，pre-N10.3 系统 unit 停止路径退役。
+- **--debug（LIF-002）**：前台阻塞跑无头引擎——托管实例互斥、unit 环境对齐（Workdir/Environment 解析）、日志 tee 到控制台、SIGINT/SIGTERM 干净退出。
+- **注释（LIF-007）**：17 文件 64 行中文注释批量转英文；豁免用户向文案（INI 模板、CI 表单）。
+- **文档**：README/BUILD.md/man 同步新流程与 CLI 面；vendor README 陈旧 `./build.sh install` 引用修正。
+
+### 验收
+- `./setup.sh --check` 绿；`make build`/`make test` 绿（ctest 50/50，0-warning）。
+- 服务动词全实测（双输出 + 退出码矩阵）；`--debug` 全流程实测；守护 stop→start/restart 循环正常。
+- 待用户端：真实终端 TUI↔daemon 交接冒烟；`sudo make install` 部署新二进制（本会话 shell 无 sudo 交互能力）。
+
+---
+
+
 ## 网络控制 N10 — 2026-09-04 — 单二进制合并：panicastd 并入 panicast（-d 前台守护模式）
 
 > **用户定版**：一个文件名、一个可执行文件——`panicast` 默认 TUI；`panicast -d`（或 systemd `panicast start`）为后台服务。`panicastd` 这个名字从仓库中彻底移除（不留兼容别名）。

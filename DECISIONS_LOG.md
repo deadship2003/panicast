@@ -1,4 +1,23 @@
 
+## L01 — LIF 准则库合规精化：构建三件套 + 服务 CLI 标准化 + 守护探测收敛（2026-09-07）
+
+**Context:** 用户引入全局 LIF 准则库（LIF-001 服务生命周期 CLI / LIF-002 --debug / LIF-006 构建三件套 / LIF-007 英文注释），要求 panicast 对齐。审计现状：裸动词服务 CLI 缺 install/uninstall/--json/scope/统一退出码；status 以 pidfile 为真相源（红线要求 init 为真相源）；`panicast log` 为内置聚合（rev3 已移出标准集）；build.sh 已被改名掉且无 Makefile；setup.sh 越权编译+安装；17 文件 64 行中文注释存量。
+
+**Decision:** 五阶段落地（每阶段独立 commit），用户确认四项关键取舍：① `service` 前缀为规范入口、裸动词保留为别名；② `--system` 保留旗标但显式拒绝（退出码 4，用户域单一设计 N10.3 维持）；③ 移除 `log` 动词（用 `tail -F` 原生命令）；④ 中文注释专项批量全转。
+
+**关键点:**
+- **守护标准化（用户点名收敛，拒绝过度设计）**：迭代期的补偿层退役——`lms_port_in_use()` 预探测删除，改为无头守护 LMS bind 失败即致命（`headless_fatal_` → exit 1），systemd Restart 自愈；unit 注入 `StartLimitIntervalSec=60/Burst=5` 防永久占用端口时 3s 死循环。真相源 = `systemctl --user show`；pidfile 降级为裸跑线索（`--daemon` 裸跑互斥 + TUI 接管的 SIGTERM 兜底 + status 异常标注）；pre-N10.3 系统 unit 停止路径删除。
+- **构建三件套**：Makefile 9 标准 target 封装 CMake/Ninja，产物统一 `./bin/`（`CMAKE_RUNTIME_OUTPUT_DIRECTORY`）；setup.sh 瘦身为纯环境（含 `--check` 预检 + Debian 13 `libncurses-dev` 包名统一）；build.sh 薄编排保留内存感知并行度 + git 新鲜度防护。install 两层分工落地：`make install`=文件层（cmake --install），`panicast service install`=注册层（ensure_user_unit 暴露为动词）。
+- **服务 CLI**：`panicast service <subcmd> [--json] [--user|--system]`；status 固定 11 字段从 systemctl show 取数；退出码 0/1/2/3/4；start 幂等（已运行 → 提示 + exit 0）。
+- **--debug（LIF-002）**：`run_daemon(debug)` 复用引擎路径——与托管实例互斥、从 unit 对齐 Workdir/Environment、Logger tee 到 stderr、SIGINT/SIGTERM 同一干净退出路径。
+- **注释**：64 行中文注释全转英文（douyin 接口文档、「本地字幕文件优先」策略名统一译 "local subtitle first"）；豁免：INI 模板内注释、CI 表单/发布说明文案（用户向 UI 文案）。
+
+**Verification:** `setup.sh --check` 绿；`make build/test` 绿（ctest 50/50、0-warning）；服务动词双输出 + 退出码实测（status/install/start 幂等/stop/restart/--system=4/未知参数=1）；`--debug` 实测（互斥拒绝 + TERM 干净退出 + pidfile 清理 + 控制台日志镜像）；守护重启换新 pid 正常。待用户端：真实终端 TUI↔daemon 交接冒烟、`sudo make install` 部署新二进制。
+
+**Followups:** 本工具 shell 内 mpv AO=null（沙箱无 pulse 访问）为环境现象非代码缺陷，真实终端不受影响；`make fmt` 会重排全量文件（用户自行决定时机）；docs/BUILD.md、README、man 已同步三件套与新 CLI 面。
+
+---
+
 ## D48 — play_list/play_list_from → mpv_play.cpp（#77 · god-object 抽取收官）
 
 **Context:** #77 续。mpv_controller.cpp 的 play_* 派发簇：D34 已迁单条播放（play_audio/play_video/play）入 mpv_play.cpp；剩 play_list（m3u 临时文件 + keep-open + loadlist）与 play_list_from（+playlist-pos 起始）两块列表派发仍留 mpv_controller.cpp。ROADMAP 既标「play_* core」为候选。
