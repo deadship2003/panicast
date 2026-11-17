@@ -1,0 +1,45 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "panicast",
+    "version": "0.0.1",
+    "version-string": "panicast-V0.0.1",
+    "description": "Terminal Podcast/Radio Player - A cross-platform podcast and radio player",
+    "homepage": "https://github.com/panicast/panicast",
+    "license": "MIT",
+    "supports": "(linux | osx | windows) & (x64 | arm64)",
+    "dependencies": [
+        {
+            "name": "curl",
+            "version>=": "8.0.0"
+        },
+        {
+            "name": "sqlite3",
+            "version>=": "3.40.0"
+        },
+        {
+            "name": "libxml2",
+            "version>=": "2.10.0"
+        },
+        {
+            "name": "fmt",
+            "version>=": "10.0.0"
+        },
+        {
+            "name": "nlohmann-json",
+            "version>=": "3.11.0"
+        },
+        {
+            "name": "ncurses",
+            "platform": "!windows"
+        },
+        {
+            "name": "mpv",
+            "platform": "linux | osx"
+        },
+        {
+            "name": "qrencode",
+            "version>=": "4.1.0"
+        }
+    ],
+    "builtin-baseline": "2024.01.12"
+}

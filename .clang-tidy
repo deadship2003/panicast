@@ -1,0 +1,35 @@
+# Panicast clang-tidy config — ADVISORY (NOT a CI blocking gate).
+#
+# The 20k-line legacy tree will produce many findings against any tidy config; this
+# file exists to guide NEW code and to be tightened incrementally as modules are
+# split during the refactor (plan R2.x). Run it manually on files you touch:
+#
+#   cmake -B build -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON   # exports compile_commands.json
+#   clang-tidy -p build src/<module>/<file>.cpp
+#
+# Findings are limited to project headers via HeaderFilterRegex (system / ncurses /
+# libmpv headers are not reported). Nothing is promoted to error (WarningsAsErrors: '')
+# so this never breaks a build or CI run.
+---
+Checks: >
+  -*,
+  bugprone-*,
+  modernize-*,
+  readability-*,
+  performance-*,
+  -bugprone-narrowing-conversions,
+  -bugprone-easily-swappable-parameters,
+  -modernize-use-trailing-return-type,
+  -modernize-use-nodiscard,
+  -modernize-use-default-member-init,
+  -readability-named-parameter,
+  -readability-identifier-length,
+  -readability-magic-numbers,
+  -readability-function-cognitive-complexity
+
+WarningsAsErrors: ''
+
+HeaderFilterRegex: 'include/panicast/.*'
+
+FormatStyle: file
+User: panicast

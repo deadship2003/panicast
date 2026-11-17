@@ -1,0 +1,264 @@
+# ╔═════════════════════════════════════════════════════════════════════════╗
+# ║                    panicast CI/CD Pipeline                              ║
+# ║        Linux x64 / Linux arm64 / macOS arm64 / macOS x64               ║
+# ║             Build → Test → Package → Release (native)                   ║
+# ╚═════════════════════════════════════════════════════════════════════════╝
+#
+# Native multi-arch build matrix — no cross-compilation. Each job runs on a
+# GitHub-hosted runner that IS the target arch, and compiles natively for it.
+#
+#   Linux x64   → ubuntu-24.04      (AMD64)
+#   Linux arm64 → ubuntu-24.04-arm  (ARM64, hosted runner)
+#   macOS arm64 → macos-14          (Apple Silicon)
+#   macOS x64   → macos-15-intel    (Intel; macos-13 retired 2025-12-04)
+#
+# Version policy (single source of truth, both jobs):
+#   workflow_dispatch "version" input → wins if set
+#   tag push                           → the tag name
+#   push main                          → git describe (e.g. v0.1.0-3-gabc1234)
+#   fallback                           → V0.0.1-dev
+#
+# Concurrency: main is a protected branch — a new main build does NOT cancel an
+#   in-flight one; every other ref (tags / manual / non-main branches) cancels
+#   the previous run to save CI time.
+#
+# Cleanup: only the noisy main-branch run history is auto-deleted (keep the
+#   latest main build); tag/release runs are NEVER deleted — they are the
+#   release record.
+#
+# Flow:
+#   push main            → build each arch + ctest(Linux) + upload artifacts,
+#                          then delete old main-branch runs
+#   push tag v*/V*       → same; if all builds pass, publish a GitHub Release
+#   workflow_dispatch    → optional version + publish_release to publish manually
+
+name: Build & Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号(留空自动:tag→标签名,否则 git describe / V0.0.1-dev)'
+        required: false
+        default: ''
+      publish_release:
+        description: '打包并发布 GitHub Release(手动发布时必须填写 version)'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [ main ]
+    tags: [ 'v*', 'V*' ]
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: ${{ github.ref_name != 'main' }}
+
+env:
+  BUILD_TYPE: Release
+
+jobs:
+  # ===========================================================================
+  # Build & Test — native matrix across 4 platforms
+  # ===========================================================================
+  build:
+    name: Build (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            label: linux-x64
+          - os: ubuntu-24.04-arm
+            label: linux-arm64
+          - os: macos-14
+            label: macos-arm64
+          - os: macos-15-intel
+            label: macos-x64
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Determine version
+        id: version
+        run: |
+          VER="${{ github.event.inputs.version }}"
+          if [ -z "$VER" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/*) VER="${GITHUB_REF_NAME}" ;;
+              *) VER="$(git describe --tags --always 2>/dev/null || echo V0.0.1-dev)" ;;
+            esac
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential cmake ninja-build pkg-config \
+            libmpv-dev libncurses-dev libcurl4-openssl-dev \
+            libsqlite3-dev libxml2-dev libfmt-dev nlohmann-json3-dev \
+            libqrencode-dev libssl-dev libgtest-dev
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # macos-14 ships an untrusted aws/tap (Homebrew 6.0 tap-trust); it prints a
+          # warning on every command. We don't use AWS, so untap it to remove the source
+          # of the warning — this does NOT disable Homebrew's trust check.
+          brew untap --force aws/tap 2>/dev/null || true
+          brew install mpv ncurses libxml2 fmt nlohmann-json qrencode cmake ninja pkg-config
+
+      - name: Configure
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} \
+              -DBUILD_TESTING=OFF -DCMAKE_PREFIX_PATH="$(brew --prefix)"
+          else
+            cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=${{ env.BUILD_TYPE }} -DBUILD_TESTING=ON
+          fi
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc 2>/dev/null || sysctl -n hw.ncpu)"
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Package
+        run: |
+          cd build
+          cpack -G TGZ
+          src_tar=$(ls panicast-*.tar.gz | head -n1)
+          cd ..
+          dest="panicast-${{ steps.version.outputs.version }}-${{ matrix.label }}.tar.gz"
+          mv "build/$src_tar" "$dest"
+          # sha256sum is Linux-only; macOS ships shasum. Both emit the same
+          # "<hash>  <file>" format, so the .sha256 verifies with either tool.
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$dest" > "$dest.sha256"
+          else
+            shasum -a 256 "$dest" > "$dest.sha256"
+          fi
+          ls -la panicast-*
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: panicast-${{ matrix.label }}
+          path: |
+            panicast-*.tar.gz
+            panicast-*.sha256
+          if-no-files-found: error
+
+      # Delete old main-branch runs (and their artifacts) so the noisy daily
+      # build history doesn't pile up — keep only the current main build. Tag /
+      # release runs are left untouched (they are the release record).
+      - name: Delete old main-branch runs
+        if: github.ref_name == 'main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh run list --workflow "${{ github.workflow }}" --branch main --status completed \
+            --limit 100 --json databaseId \
+            | jq -r '.[].databaseId' \
+            | grep -vx "${{ github.run_id }}" \
+            | while read -r id; do
+                gh api -X DELETE "repos/${{ github.repository }}/actions/runs/$id" >/dev/null 2>&1 || true
+              done
+
+  # ===========================================================================
+  # Release — publish on v*/V* tag push, or manual workflow_dispatch with
+  # publish_release=true. Reuses the artifacts already built by the matrix job.
+  # ===========================================================================
+  release:
+    name: Publish Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Determine version
+        id: version
+        run: |
+          VER="${{ github.event.inputs.version }}"
+          if [ -z "$VER" ]; then
+            case "$GITHUB_REF" in
+              refs/tags/*) VER="${GITHUB_REF_NAME}" ;;
+              *) VER="$(git describe --tags --always 2>/dev/null || echo V0.0.1-dev)" ;;
+            esac
+          fi
+          # Manual publish must name an explicit version — never ship V0.0.1-dev.
+          if [ "${{ github.event_name }}" = 'workflow_dispatch' ] && [ -z "${{ github.event.inputs.version }}" ]; then
+            echo "::error::手动发布 Release 必须填写 version(例如 v0.1.0)"
+            exit 1
+          fi
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.version }}
+        run: |
+          cat > notes.md <<'EOF'
+          ## panicast ${{ steps.version.outputs.version }}
+
+          原生多平台构建（无交叉编译）：每个平台在对应架构的 runner 上各自编译。
+          自动发布：CI 全部平台构建（Linux 含单元测试）通过后由 GitHub Actions 生成。
+
+          ### 平台产物
+
+          | 文件 | 平台 / 架构 |
+          |---|---|
+          EOF
+          for f in release/panicast-*.tar.gz; do
+            name=$(basename "$f")
+            case "$name" in
+              *linux-x64*)    plat="Linux x86_64" ;;
+              *linux-arm64*)  plat="Linux arm64" ;;
+              *macos-arm64*)  plat="macOS arm64 (Apple Silicon)" ;;
+              *macos-x64*)    plat="macOS x86_64 (Intel)" ;;
+              *)              plat="" ;;
+            esac
+            echo "| \`$name\` | $plat |" >> notes.md
+          done
+          cat >> notes.md <<'EOF'
+
+          ### Install
+
+          ```bash
+          sha256sum -c panicast-*-<你的平台>.tar.gz.sha256     # Linux
+          shasum -a 256 -c panicast-*-<你的平台>.tar.gz.sha256 # macOS
+          tar xf panicast-*-<你的平台>.tar.gz
+          sudo cp panicast-*/bin/panicast /usr/local/bin/
+          ```
+
+          ### Runtime requirements
+
+          - **Linux (Debian/Ubuntu)**：`sudo apt install mpv libmpv2 libncursesw6 libfmt10 libcurl4 libxml2 libsqlite3-0 libqrencode4`
+          - **Linux (Arch)**：`sudo pacman -S mpv ncurses curl libxml2 sqlite fmt nlohmann-json qrencode`
+          - **macOS**：`brew install mpv ncurses libxml2 fmt nlohmann-json qrencode`
+          - 可选：`ffmpeg yt-dlp`（在线节目解析/下载）、`whisper.cpp`（AI 字幕）、quickjs-ng/deno（YouTube nsig）
+          EOF
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" release/* --clobber
+          else
+            gh release create "$TAG" release/* \
+              --title "panicast $TAG" \
+              --notes-file notes.md
+          fi

@@ -1,0 +1,688 @@
+.TH panicast 1 "2026-08-01" "panicast-V0.0.1" "User Commands"
+.SH NAME
+panicast \- Terminal-based media player
+.SH SYNOPSIS
+.B panicast
+[\fIOPTIONS\fR]
+.SH DESCRIPTION
+panicast is a powerful terminal-based podcast and radio player with an ncurses interface.
+It supports TuneIn radio streaming, RSS podcast subscriptions, YouTube playback, and local media files.
+.SH OPTIONS
+.TP
+.B service \fISUBCOMMAND\fR [\fIOPTIONS\fR]
+Manage the background service (a USER systemd unit; sudo-free). Subcommands:
+\fBinstall\fR (generate/refresh the unit; never starts it), \fBuninstall\fR (stop,
+disable and remove the unit), \fBstart\fR, \fBstop\fR, \fBrestart\fR,
+\fBenable\fR, \fBdisable\fR (autostart only — never starts/stops the instance),
+\fBstatus\fR (service + playback status; the init system is the truth source, a
+mismatching pid file is flagged as an anomaly).
+Options: \fB--json\fR (machine-readable output on every subcommand; status carries
+scope/unitPath/installed/enabled/running/pid/uptimeSeconds/lastExitCode/lastError/
+restartCount/platformInit), \fB--user\fR (the default) and \fB--system\fR (accepted
+for interface uniformity but refused with exit code 4 — panicast is user-scope by
+design).
+Bare aliases (\fBpanicast start\fR, \fBpanicast status\fR, ...) dispatch
+identically. Exit codes: 0 success / 1 invalid arguments / 2 insufficient
+privileges / 3 service operation failed / 4 unsupported scope.
+Logs are viewed with native tools (no built-in log command):
+\fBtail \-F ~/.local/share/panicast/panicast\-$(date +%Y%m%d).log\fR.
+.TP
+.B \-\-debug
+LIF-002 debug channel: run the headless engine in the blocking foreground with the
+unit's runtime context aligned (WorkingDirectory + Environment from the user unit)
+and every log line mirrored to the console. Refuses to start while the
+systemd-managed daemon is running (stop it with \fBpanicast service stop\fR first).
+SIGINT (Ctrl+C) exits through the same clean shutdown path as the service. Cannot
+be combined with the service subcommands.
+.TP
+.B \-d, \-\-daemon
+Run the headless daemon: the same engine as the TUI with a NullFrontend \(em playback,
+queue, subscriptions, downloads and the remote-control servers run without a terminal
+(Squeezer / the web remote is the UI). Foreground process; SIGTERM (Ctrl+C) exits
+cleanly. Refuses to start when another daemon instance is already running. The systemd
+unit runs this mode: \fBpanicast.service\fR (manage via \fBpanicast service
+start/stop/restart/status\fR; \fBstart\fR while already running is an idempotent
+no-op — use \fBrestart\fR to recycle). A failed mini-LMS bind is fatal here (the
+daemon exits non-zero; systemd's restart policy self-heals).
+.TP
+.B \-h, \-\-help
+Display help message and exit.
+.TP
+.B \-v, \-\-version
+Display version information and exit.
+.TP
+.B \-a \fIURL\fR, \-\-add \fIURL\fR
+Add a new subscription from the specified URL.
+.TP
+.B \-i \fIFILE\fR, \-\-import \fIFILE\fR
+Import subscriptions from an OPML file.
+.TP
+.B \-e \fIFILE\fR, \-\-export \fIFILE\fR
+Export subscriptions to an OPML file.
+.TP
+.B \-t \fITIME\fR, \-\-timer \fITIME\fR
+Set a sleep timer. TIME can be in formats: 30m (30 minutes), 2h (2 hours), or 1:30:00 (1 hour 30 minutes).
+.TP
+.B \-\-purge
+Clear all cached data and reset the application.
+.TP
+.B \-\-quiet
+Pure audio mode (equivalent to --vo=null --vid=no). Disables video output and video track decoding.
+.TP
+.B \-\-vid <value>
+Override mpv video track setting (auto or no). Overrides [mpv] vid in config.ini.
+.TP
+.B \-\-vo <value>
+Override mpv video output driver (e.g., auto, null, gpu, wlshm). Overrides [mpv] vo in config.ini.
+.TP
+.B \-\-ao <value>
+Override mpv audio output driver (e.g., pulse,alsa, pulse, alsa, pipewire, auto). Overrides [mpv] ao in config.ini. Default = pulse,alsa (pulse first, alsa fallback; avoids auto's pipewire-probe stderr on WSLg).
+.SH KEYBINDINGS
+.SS Navigation
+.TP
+.B j / Down
+Move down
+.TP
+.B k / Up
+Move up
+.TP
+.B g
+Go to first item
+.TP
+.B G
+Go to last item
+.TP
+.B h
+Collapse folder / Go back
+.TP
+.B l / Enter
+Expand folder / Play the selected episode. The sibling episodes under the same
+parent node (the "peers") become the implicit play list; playback advances through
+them according to the current play mode. Marked items: plays the first marked episode.
+.SS Playback
+.TP
+.B Space / p
+Play/Pause
+.TP
+.B + / \-
+Volume up/down
+.TP
+.B [ / ]
+Speed down/up
+.TP
+.B \\
+Reset speed to 1.0x
+.SS Play Mode & Play Context
+There is no separate, persisted play list. The play list is always the peers
+(sibling episodes) of the episode currently playing — including all favourite
+episodes when playing directly under Favorites root. A single track is loaded
+into mpv at a time; on end-of-track the application advances an internal pointer
+according to the play mode.
+.TP
+.B :
+Open the command window and type a play mode: the first letter
+.BR r ,
+.BR s ,
+.B c
+or the full word
+.BR repeat ,
+.BR shuffle ,
+.BR cycle
+(case-insensitive). The mode is global and persisted to
+.B [playback] mode
+in the config file.
+.TP
+.B repeat (r)
+Single-track loop — the current episode replays (mpv loop-file).
+.TP
+.B shuffle (s)
+Random next episode. Three upcoming random indices are pre-generated so the
+INFO preview shows the real upcoming tracks.
+.TP
+.B cycle (c)
+Sequential list loop — advance to the next peer and wrap around at the end.
+This is the default.
+.PP
+The right-hand INFO area shows a 7-line play context while playing:
+3 most-recent global history episodes (up arrows), the current episode
+(highlighted), and the 3 upcoming episodes (down arrows) per the current mode.
+.SS Mode Switching
+.TP
+.B R
+Radio mode
+.TP
+.B P
+Podcast mode
+.TP
+.B F
+Favorites mode
+.TP
+.B H
+History mode
+.TP
+.B O
+Online search mode
+.TP
+.B Y
+Account mode (Google accounts, Y01). Manage multiple Google accounts with independent
+YouTube subscriptions and watch history. Each account is a tree node with "播放历史"
+and "订阅列表" children. Press
+.B a
+to log in one account via a QR code (Google OAuth device flow), or
+.B A
+to log in an additional account.
+.B l/Enter
+activates the selected account,
+.B r
+re-syncs its subscriptions and watch history, and
+.B d
+deletes it. The active account's OAuth token is automatically used by yt-dlp/mpv for
+YouTube playback and downloads (login state, bypasses bot verification).
+.TP
+.B M
+Cycle through modes
+.SS Y Mode (Google Accounts) [Y01]
+.TP
+.B a
+Log in one Google account: displays a QR code (requires libqrencode; falls back to a text
+code otherwise) encoding the Google OAuth device-flow verification URL. Scan it with a phone,
+authorize, and the account is added and set active.
+.TP
+.B A
+Log in ANOTHER Google account (add an additional account alongside existing ones).
+.TP
+.B l , Enter
+On an account node: activate it (set as the active account). On "播放历史"/"订阅列表":
+expand its children. On a channel: load its videos. On a video: play it.
+.TP
+.B r
+Re-sync the selected account's YouTube subscriptions and watch history.
+.TP
+.B d
+Delete the selected account and all its per-account YouTube data (after confirmation).
+.PP
+All account data is stored in the single SQLite database
+(~/.local/share/panicast/panicast.db); OAuth tokens are encrypted at rest with a
+machine-bound key. Existing podcast/radio/favorites/history data stays global and is
+unaffected by Y mode.
+.SS Other
+.TP
+.B a
+Context action: add feed (Podcast mode), subscribe to podcast (Online mode), or add a local media folder (Favourite mode).
+.TP
+.B f
+Add to favorites
+.TP
+.B d
+Delete item
+.TP
+.B D
+Download the selected episode, or batch-download all marked episodes if any marks are set.
+.TP
+.B e
+Edit the selected node's title and URL.
+.TP
+.B m
+Toggle the mark on the selected node (used for batch play/download/favourite).
+.TP
+.B v
+Enter Visual (multi-mark) mode from the cursor.
+.TP
+.B V
+Clear all marks.
+.TP
+.B o
+Toggle sort order (ascending/descending) of the current list.
+.TP
+.B r
+Refresh the selected node (re-fetch its feed / re-expand). In Account mode, re-sync the
+selected account's YouTube subscriptions and watch history; on the Subscriptions or History
+container, re-sync only that subtree. In Bilibili mode, re-fetch the followings / history
+under the cursor (or re-expand the account node). In TikTok mode, re-fetch the creator's
+video list online and replace the local cache.
+.TP
+.B b
+Switch region (Online mode: iTunes storefront region; TikTok mode: TikTok/Douyin region).
+.TP
+.B N
+Jump to the currently-playing node.
+.TP
+.B S
+Toggle scroll mode for long lines in the tree/LOG areas.
+.TP
+.B U
+Toggle icon style (ASCII vs Emoji).
+.TP
+.B C
+Clear the implicit peer playlist while keeping the current track playing (stops auto-advance).
+.TP
+.B L
+Toggle the LYRIC (unified subtitle) bar. Source priority: local SRT > online transcript > ASR.
+In Favourite mode, transcribe the selected or v-marked episodes with whisper.cpp to .srt.
+.TP
+.B :
+Open the command window: type a play mode (r/s/c or repeat/shuffle/cycle), an mpv native
+hotkey (see MPV HOTKEYS below), or
+.B asr
+to force real-time ASR on the playing track.
+.TP
+.B Ctrl+B
+Set the cookies.txt path (context: YouTube / Bilibili / TikTok-Douyin) for yt-dlp and mpv.
+.TP
+.B Ctrl+L
+Cycle through 22 color themes (Solarized Dark, Gruvbox, Nord, Dracula, Catppuccin Mocha, One Dark, Rose Pine, Monokai Pro, etc.).
+.TP
+.B Ctrl+N
+Open the network proxy configuration dialog. Accepts
+.BR socks5h:// host:port ,
+.BR socks5:// host:port ,
+.BR socks4:// host:port ,
+.BR http:// host:port ,
+or
+.BR https:// host:port .
+A bare
+.B socks://
+is normalized to
+.BR socks5h:// .
+Empty value disables the proxy (direct/transparent proxy). Applies to all curl fetches and yt-dlp invocations; takes effect immediately without restart.
+.TP
+.B Ctrl+Y
+Copy the URL of the object under the cursor (podcast feed, episode, local folder, or online item)
+to the system clipboard. Falls back to the playing item's URL when the cursor has none. If the
+cursor object has a transcript, its transcript URL is also written to the log (to investigate
+episodes that show the 📜 marker but load no lyric). Requires a clipboard helper
+(xclip/xsel/wl-copy/pbcopy/clip.exe); otherwise the URL is only logged.
+.TP
+.B Mouse
+Left-click a node in the tree to select and expand/play; mouse wheel to scroll
+.TP
+.B /
+Search
+.TP
+.B ?
+Show help
+.TP
+.B q
+Quit
+.SH "MPV HOTKEYS (: COMMAND WINDOW)"
+Press
+.B :
+to open the command window, then type a single character. Play-mode chars
+.RB ( r / s / c )
+set repeat/shuffle/cycle. Any other char below is forwarded to mpv as
+.BR mpv_command_string .
+Keys are aligned to mpv's native default
+.I input.conf
+where a native binding exists.
+.PP
+Video / zoom / aspect / deinterlace:
+.RS
+.TP
+.B + / - / =
+add video-zoom +0.1 / -0.1 / set video-zoom 0  (zoom in / out / reset; no native plain key \(em mpv uses Alt++/Alt+-)
+.TP
+.B f
+fullscreen  (native)
+.TP
+.B A
+cycle video-aspect  (native)
+.TP
+.B d
+cycle deinterlace  (native)
+.RE
+Subtitle:
+.RS
+.TP
+.B F / G
+sub-scale -0.1 / +0.1  (size down/up; native)
+.TP
+.B z / Z
+sub-delay -0.1 / +0.1  (subtitles earlier/later; native)
+.TP
+.B r / R
+sub-pos -1 / +1  (subtitles up/down; native)
+.TP
+.B v
+cycle sub-visibility  (hide/show; native)
+.TP
+.B j / J
+cycle sub / cycle sub down  (next/prev subtitle track; native)
+.RE
+Audio:
+.RS
+.TP
+.B #
+cycle audio  (switch audio track; native)
+.TP
+.B m
+cycle mute  (native)
+.RE
+OSD / stats:
+.RS
+.TP
+.B o / O
+show-progress / cycle-values osd-level 3 1  (native)
+.TP
+.B i / I
+stats/display-stats / stats/display-stats-toggle  (native)
+.RE
+Loop / screenshot:
+.RS
+.TP
+.B l
+ab-loop  (set/clear A-B loop; native)
+.TP
+.B s / S
+screenshot / screenshot video  (with / without subtitles; native)
+.RE
+Video EQ (native):
+.RS
+.TP
+.B 1 / 2
+contrast -1 / +1
+.TP
+.B 3 / 4
+brightness -1 / +1
+.TP
+.B 5 / 6
+gamma -1 / +1
+.TP
+.B 7 / 8
+saturation -1 / +1
+.RE
+.SH LAYOUT
+The terminal is split into a left panel (feeds tree) and a right panel (INFO + LOG),
+plus a 3-row status bar at the bottom. The split ratios are set in
+.B [display]
+of config.ini:
+.B layout_ratio
+(left:right, default 0.25 = 25:75) and
+.B log_height_ratio
+(LOG share of the right panel, default 0.3 = INFO:LOG 70:30).
+.PP
+.B LOG compression.
+.B log_compress_height
+(default 23) is the terminal height (including the 3-row status bar) at/above which the
+INFO:LOG ratio holds. When the terminal height drops below it, the LOG area is compressed:
+LOG loses one row per row of height loss (INFO is preserved \[em] the progress bar and
+playback status are prioritized over LOG), and LOG is hidden entirely once it would fit
+fewer than 2 rows (INFO then takes the whole right panel). It is configurable so a
+different display/resolution can adjust the threshold.
+The terminal window size is controlled by the terminal emulator and cannot be locked or
+prevented from shrinking by the application \[em] this is a degradation threshold, not a
+hard window lock. The ratios are approximate (±1 column/row) due to the character grid.
+.SH YOUTUBE (P MODE vs Y MODE)
+YouTube support has two independent modes (either or both may be used):
+.PP
+.B P mode
+(PODCAST/ONLINE): subscribe/parse YouTube channels via
+.B yt-dlp
++ cookies. Needs
+.I youtube_cookie.txt
+,
+.I yt-dlp
+, a JS runtime
+.RI ( quickjs-ng ),
+and (in GFW) a proxy. No Google login required.
+.PP
+.B Y mode
+(ACCOUNT): scan-code Google OAuth login. Subscription list / search / episode list use the
+YouTube Data API v3 (OAuth token, no cookies/yt-dlp needed).
+.B Playback still needs cookies
++ yt-dlp + JS runtime (the OAuth token cannot be used for playback — yt-dlp 2026.07 removed OAuth playback).
+.PP
+Both modes share the same yt-dlp args (cookies + player_client + js_runtime) and the
+.I episode_cache
+DB table, so fixes to these shared components apply to both.
+.SH YOUTUBE CONFIGURATION
+.TP
+.B [youtube] cookies_file
+Netscape cookies.txt path (single source, no browser fallback). Empty/bare
+.I youtube_cookie.txt
+resolves to
+.IR ~/.local/share/panicast/youtube_cookie.txt .
+Set via
+.B Ctrl+B
+Required for playback (bot-check bypass).
+.TP
+.B [youtube] player_client
+Default
+.IR tv_downgraded,web
+(yt-dlp's official default for cookie-authed requests; least likely to trip "Sign in to confirm you're not a bot").
+.TP
+.B [youtube] js_runtime
+Default
+.IR quickjs
+(resolve
+.I qjs
+/
+.I qjsng
+on PATH, pass
+.BI \-\-js\-runtimes " quickjs:<path>"
+). Also accepts
+.IR deno ,
+.IR "quickjs:/path" ,
+or empty (yt-dlp default = deno).
+.TP
+.B [youtube] play_format_video
+yt-dlp
+.B \-f
+format for VIDEO playback. Default
+.IR "bestvideo[height<=1080]+bestaudio/best"
+(1080p DASH; video+audio separate streams, mpv merges via audio-file; needs ffmpeg). YouTube has no 1080p single file, so 1080p REQUIRES this DASH form.
+.TP
+.B [youtube] play_format_audio
+yt-dlp
+.B \-f
+format for audio-only playback. Default
+.IR bestaudio/best
+(highest audio quality).
+.TP
+.B [youtube] sub_lang
+YouTube subtitle language code to load as soft subtitles (Y11). Empty = no subtitles (default,
+opt-in). e.g.
+.IR en , " zh-Hans" , " ja" .
+When set,
+.B resolve_youtube_url
+also runs
+.I "yt-dlp --write-subs --write-auto-sub --sub-langs <lang> --sub-format vtt --skip-download"
+to fetch a .vtt, and mpv loads it via
+.B sub-file
+(per-file option). Soft subtitles are centered by default and respond to
+.B F/G
+(size),
+.B r/R
+(position),
+.B z/Z
+(sync),
+.B v
+(visibility). Burned-in (hardcoded) subtitles cannot be changed (they are part of the video).
+.TP
+.B [youtube] sub_auto
+.I true
+(default): use auto-generated captions when no manual subtitle exists for
+.IR sub_lang .
+.TP
+.B OAuth client (Y mode)
+Three methods (priority: runtime file > baked builtin > fallback):
+(1) drop
+.I client_secret*.json
+into
+.IR ~/.local/share/panicast/ ;
+(2) put
+.I secrets/client_secret.json
+in the source tree before build (CMake auto-detects and bakes it);
+(3) use the built-in fallback client. See
+.BR secrets/client_secret.json.example .
+.SH BILIBILI (B MODE, Y15)
+B mode supports Bilibili video login, browse, search, play and download.
+No JS runtime needed (Bilibili has no nsig challenge).
+.PP
+QR scan = cookie acquisition (like Y mode OAuth scan = token acquisition).
+The SESSDATA cookie obtained via QR scan is written to bilibili_cookie.txt and
+shared between B mode (following list) and P mode (playback — high resolution requires login).
+Video list (WBI-signed arc/search API) does NOT require login; only the following list and
+high-res playback do.
+.TP
+.B a
+Login via QR scan (Bilibili passport API → SESSDATA cookie).
+.TP
+.B A
+Login another Bilibili account (QR scan, same as a).
+.TP
+.B Ctrl+B
+Set Bilibili cookie file path (context-aware: in B mode → [bilibili] cookies_file).
+.TP
+.B l / Enter
+Expand account (following list via WBI API) / UP master (video list via WBI API) / play video.
+.TP
+.B /
+Search Bilibili (yt-dlp bilisearch).
+.TP
+.B [bilibili] cookies_file
+Netscape cookies.txt path (default <data_dir>/bilibili_cookie.txt).
+QR login writes SESSDATA here automatically. Ctrl+B can set a custom path.
+
+.SH "TIKTOK / DOUYIN (T MODE, Y24.11)"
+T mode supports TikTok and Douyin (Chinese TikTok) video subscription and playback,
+anonymous (no login). Region is shown in the status-bar border (e.g. TIKTOK [US], 抖音 [CN]);
+the root node label is static.
+.PP
+TikTok creator listings work anonymously via yt-dlp (tiktok:user). Douyin has NO user-list
+extractor in yt-dlp (no DouyinUserIE), so Douyin supports only single-video playback (option A);
+Douyin user URLs are rejected with a message.
+.TP
+.B T
+Enter T mode.
+.TP
+.B a
+Add: @user, a tiktok.com video URL, or a douyin.com video URL.
+A TikTok video URL auto-subscribes its @user (the @user is in the URL); expanding lists all
+that creator's videos. A Douyin video URL is saved as a playable leaf (Douyin can't list users).
+.TP
+.B /
+Open: @user / #tag / URL. NO anonymous keyword search (search engines don't index
+tiktok.com/douyin.com content pages and yt-dlp has no search extractor).
+#tag browses the tag via yt-dlp (currently dormant — yt-dlp tiktok:tag is _WORKING=False upstream;
+auto-works if re-enabled).
+.TP
+.B b
+Cycle region: US JP GB DE FR KR ID TH VN MY BR MX CN. CN = Douyin (douyin.com); the other 12
+are TikTok regions (tiktok.com) with --geo-bypass-country <CC>.
+.TP
+.B l / Enter
+Expand a TikTok creator → its video list (yt-dlp --flat-playlist) / play a video.
+.TP
+.B d
+Delete the item under the cursor.
+.TP
+.B Ctrl+B
+Import cookie (context-aware: in T mode CN region → [tiktok] douyin_cookies_file; else
+[tiktok] cookies_file). Netscape cookies.txt. TikTok works anonymously; Douyin needs a cookie
+(fresh, not necessarily logged in) + a China network exit.
+.TP
+.B [tiktok] region
+T-mode region code (default US). b cycles; persisted.
+.TP
+.B [tiktok] cookies_file
+Optional TikTok Netscape cookies.txt (default <data_dir>/tiktok_cookie.txt). Anonymous works without it.
+.TP
+.B [tiktok] douyin_cookies_file
+Douyin Netscape cookies.txt (default <data_dir>/douyin_cookie.txt). Required for Douyin (fresh cookie).
+
+.SH "TRANSCRIPTION (whisper.cpp, Y24.30)"
+Offline speech-to-text for episodes without subtitles, via whisper.cpp. Produces an SRT sidecar
+(<file>.srt next to the media) that is auto-loaded on replay (probe_sidecar). Real-time
+transcription is Y24.30 (not yet).
+.PP
+Dependencies (user-installed): Arch \(en sudo pacman -S whisper-cpp; Debian \(en sudo apt install
+whisper.cpp (or build from https://github.com/ggml-org/whisper.cpp). Download a GGML model from
+https://huggingface.co/ggerganov/whisper.cpp (small.en-q5_1 for capable CPUs, tiny.en for weak).
+.TP
+.B L (F mode)
+Transcribe the local file under the cursor, or the v-marked files. Queues offline jobs;
+ffmpeg (to 16kHz mono WAV) + whisper-cli (to SRT) per file, concurrency ≤
+.B [transcription] max_concurrent
+(default 3, dynamic CPU-load aware via getloadavg). The SRT is saved as <file>.srt and the node
+is updated (replay or press r to load).
+.TP
+.B [transcription] whisper_bin
+Path to whisper-cli (default whisper-cli; use an absolute path if built from source).
+.TP
+.B [transcription] model
+Path to the GGML model file (e.g. ggml-small.en-q5_1.bin).
+.TP
+.B [transcription] max_concurrent
+Max concurrent offline jobs (default 3); the dispatcher ramps within [1, max] based on CPU load.
+
+.SH FILES
+.TP
+.I ~/.local/share/panicast/
+Data directory containing database and cache
+.TP
+.I ~/.local/share/panicast/panicast.db
+SQLite database file. Holds subscriptions, history, favourites, progress, and the
+media cache (table
+.BR media_cache :
+URL \(-> cached/downloaded flags + local file path). On first launch after upgrade
+from a version that used
+.IR cached_urls.json ,
+the cache is migrated into the database in one transaction and the legacy JSON file
+is renamed to
+.I cached_urls.json.migrated
+(only after the DB write commits).
+.TP
+.I ~/.local/share/panicast/downloads/
+Downloaded media files
+.TP
+.I ~/.local/share/panicast/youtube_cookie.txt
+Netscape-format YouTube cookies for yt-dlp playback (set via
+.B Ctrl+B
+or [youtube] cookies_file). Default cookie location.
+.TP
+.I ~/.local/share/panicast/client_secret*.json
+Optional runtime Google OAuth client (Y mode). If present, overrides the built-in client.
+.TP
+.I secrets/client_secret.json
+Source-tree OAuth client (optional). If present at CMake configure time, baked as the built-in default. Gitignored.
+.TP
+.I ~/.config/panicast/config.ini
+Configuration file. Sections include
+.B [display]
+(theme_index: 0-8 color scheme; layout_ratio: left:right panel split, default 0.25 = 25:75; log_height_ratio: LOG share of the right panel, default 0.3 = INFO:LOG 70:30; log_compress_height: terminal-height threshold below which LOG is compressed, default 23, see LAYOUT),
+.B [colors]
+(customizable node-tree state colors: currently_playing, downloaded, stream_cached, db_cached, parse_failed),
+.B [network]
+(proxy: socks5h://host:port or http://host:port, empty=direct),
+.B [playback]
+(mode: repeat|shuffle|cycle — the global play mode), and
+.B [statusbar_color]
+(status bar color mode). See the file header for the full color-code reference.
+.SH DEPENDENCIES
+.B mpv
+- Media player backend
+.br
+.B ncurses
+- Terminal UI library
+.br
+.B libcurl
+- Network requests
+.br
+.B libxml2
+- XML/RSS parsing
+.br
+.B sqlite3
+- Database storage
+.br
+.B yt-dlp
+- YouTube support (optional)
+.br
+.B libqrencode
+- QR code rendering for Google account login (Y01, optional; falls back to a text code)
+.SH AUTHOR
+Written by Panic <Deadship2003@gmail.com>
+.SH LICENSE
+MIT License
+.SH "SEE ALSO"
+.BR mpv (1),
+.BR yt-dlp (1)

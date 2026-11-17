@@ -1,0 +1,24 @@
+
+# Y09: user's own OAuth client (baked at build if present). NEVER commit real secrets.
+secrets/client_secret.json
+# CMake-generated from the .h.in template
+include/podradio/net/client_secret_builtin.h
+build*/
+build-*/
+bin/
+compile_commands.json
+*.o
+include/panicast/net/client_secret_builtin.h
+
+# Claude Code local config — NEVER push
+.claude/
+
+# Editor / OS cruft
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+.build-root-owned/

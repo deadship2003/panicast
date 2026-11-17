@@ -1,0 +1,54 @@
+# Panicast C++ formatting style.
+#
+# Matched to the dominant hand-style of the existing codebase:
+#   - 4-space indent, no tabs
+#   - `namespace panicast\n{` (brace on its own line); class/struct/enum/function
+#     and control-statement braces attached (K&R)
+#   - access modifiers outdented to the class indent (`public:` flush with class body)
+#   - comments NOT reflowed (many long, intentional comment lines in this codebase)
+#   - includes NOT auto-reordered
+#
+# STATUS — the tree has been mass-formatted (clang-format 19, two -i passes, 0 violations).
+# The CI format step runs ADVISORY because the CI runner (ubuntu-22.04) ships clang-format
+# ~14 by default, which can disagree with local v19 on edge cases — a blocking gate could
+# then falsely fail. To promote to BLOCKING: pin CI clang-format to the same version as
+# local (e.g. clang-format-19 from apt.llvm.org), then drop `continue-on-error` from the
+# Format step in .github/workflows/build.yml.
+---
+BasedOnStyle: LLVM
+Language: Cpp
+Standard: c++17
+
+# Indentation
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ContinuationIndentWidth: 4
+AccessModifierOffset: -4
+
+# Line length & comments
+ColumnLimit: 100
+ReflowComments: false
+SortIncludes: Never
+
+# Namespaces are not indented (members sit at column 0 inside `namespace panicast`)
+NamespaceIndentation: None
+
+# Brace placement: only namespace braces wrap to a new line; everything else stays
+# attached (LLVM defaults under Custom mode are all "attached").
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterNamespace: true
+
+# Short forms
+AllowShortEnumsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+
+# Pointers & spacing
+PointerAlignment: Right
+SpaceBeforeParens: ControlStatements
+AlignTrailingComments: true
+AlignConsecutiveAssignments: false
+AlignConsecutiveDeclarations: false
